@@ -1,4 +1,4 @@
-import { readFile, readdir, stat, mkdir, appendFile } from "fs/promises";
+import { readFile, readdir, writeFile, stat, mkdir, appendFile } from "fs/promises";
 import { resolve, join } from "path";
 import { homedir } from "os";
 import type { Config } from "./config.js";
@@ -55,6 +55,21 @@ export class Orchestrator {
         source_path: args,
       });
       return result.output;
+    });
+
+    this.bot.onCommand("todo", async (args) => {
+      if (!args) return "Usage: /todo <task description>";
+      const slug = args
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 50);
+      const now = new Date().toISOString().slice(0, 10);
+      const fileName = `${slug}.md`;
+      const filePath = resolve(this.config.vaultPath, "tasks", fileName);
+      const content = `# tasks\n- [ ] ${args}\n\n## Progress Log\n- ${now}: Created via Telegram\n`;
+      await writeFile(filePath, content);
+      return `Task created: ${fileName}`;
     });
   }
 
