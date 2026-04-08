@@ -4,6 +4,9 @@
   "description": "Three-loop agent system bridging Obsidian, Claude Code, and Telegram",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "thinkops": "bin/thinkops.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
