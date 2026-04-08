@@ -157,24 +157,28 @@ export class Orchestrator {
     const outputPreview = result.output.slice(0, 500);
     console.log(`[task-loop] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
 
-    // Step 3: Handle human input if needed
-    if (result.humanInputNeeded) {
-      console.log(`[task-loop] human input needed: ${result.humanInputNeeded}`);
+    // Step 3: Handle human input loop — agent may ask multiple questions
+    let current = result;
+    while (current.humanInputNeeded) {
+      console.log(`[task-loop] human input needed: ${current.humanInputNeeded}`);
       try {
-        const answer = await this.bot.askQuestion(result.humanInputNeeded);
-        const resumed = await resume(
+        const answer = await this.bot.askQuestion(current.humanInputNeeded);
+        console.log(`[task-loop] user answered: ${answer}`);
+        current = await resume(
           this.config,
-          result.sessionId,
+          current.sessionId,
           `The user answered: ${answer}\n\nPlease continue executing the task.`,
         );
-        this.bot.notify(
-          `Task *${next.name}* resumed.\n${resumed.humanInputNeeded ? "More input needed." : "Completed."}`
-        ).catch(() => {});
+        const resumePreview = current.output.slice(0, 300);
+        console.log(`[task-loop] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
       } catch (err) {
         console.error(`[task-loop] Q&A failed for ${next.name}:`, err);
         this.bot.notify(`Task *${next.name}* timed out waiting for input.`).catch(() => {});
+        break;
       }
-    } else {
+    }
+
+    if (!current.humanInputNeeded) {
       // Verify the task file was actually updated
       const updatedContent = await readFile(next.path, "utf-8");
       const updatedStatus = extractFrontmatterField(updatedContent, "status");
