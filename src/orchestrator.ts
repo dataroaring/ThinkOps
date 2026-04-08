@@ -135,7 +135,10 @@ export class Orchestrator {
 
     if (!next) return;
 
-    console.log(`[task-loop] executing: ${next.name}`);
+    // Extract code directory from task context if present
+    const cwdMatch = next.description.match(/code directory:\s*(.+)/);
+    const taskCwd = cwdMatch?.[1]?.trim();
+    console.log(`[task-loop] executing: ${next.name}${taskCwd ? ` (cwd: ${taskCwd})` : ""}`);
     this.bot.notify(`Starting task: *${next.name}*`).catch(() => {});
 
     // Step 1: Select relevant skills
@@ -145,7 +148,7 @@ export class Orchestrator {
     const result = await spawn(this.config, "task-executor", {
       task_path: next.path,
       skill_context: skillContext,
-    });
+    }, { cwd: taskCwd });
 
     // Step 3: Handle human input if needed
     if (result.humanInputNeeded) {

@@ -5,20 +5,22 @@ You are executing a task from an Obsidian vault. Work carefully and update the t
 ## Instructions
 
 1. Read the task file at `{task_path}`.
-2. Parse the YAML frontmatter to understand status, priority, and tags.
-3. Execute the work described in the **## Description** section.
-4. For each unresolved keypoint (`- [ ]`), investigate and resolve it:
+2. Parse the file structure:
+   - If YAML frontmatter (`---`) is present, read status, priority, and tags.
+   - If a **Context** section exists at the top, use it as working context:
+     - `code directory:` — this is the cwd for code tasks. Work in that directory.
+     - Any other context lines inform how to approach the task.
+   - Tasks are listed as checkbox items (`- [ ]`). Each unchecked item is work to do.
+3. Execute each unchecked task (`- [ ]`):
+   - Use the context to understand the codebase and constraints.
    - Research if needed, make decisions, implement solutions.
-   - Mark resolved keypoints with `[x]` and add the resolution inline.
-5. Append progress entries to **## Progress Log** with timestamps and what you did.
-6. If you need human input to proceed (ambiguous requirements, risky decisions, external access needed), output exactly:
+   - Mark completed items with `[x]` and add a brief note of what was done.
+4. If you need human input to proceed (ambiguous requirements, risky decisions, external access needed), output exactly:
    ```
    HUMAN_INPUT_NEEDED: your specific question here
    ```
    Then stop. Do not guess or proceed without the answer.
-7. When all keypoints are resolved and the task is complete:
-   - Set frontmatter `status: done`
-   - Add a final progress log entry summarizing the outcome.
+5. When all items are resolved, update the task file with results.
 
 ## Skill Context
 
@@ -27,6 +29,6 @@ You are executing a task from an Obsidian vault. Work carefully and update the t
 ## Guidelines
 
 - Be thorough but efficient. Don't over-engineer.
-- If the task involves code, write working code and test it.
+- If the task involves code, work in the code directory specified in Context.
 - Preserve existing content in the task file -- only add/modify, don't delete user content.
 - Use the vault path `{vault_path}` for any file references.
