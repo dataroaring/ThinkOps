@@ -145,9 +145,11 @@ export class Orchestrator {
     // Step 1: Select relevant skills
     const skillContext = await this.loadSkillContext(next.description);
 
-    // Step 2: Execute task with skill context
+    // Step 2: Read task content and pass inline (agent may not have vault access)
+    const taskContent = await readFile(next.path, "utf-8");
     const result = await spawn(this.config, "task-executor", {
       task_path: next.path,
+      task_content: taskContent,
       skill_context: skillContext,
     }, { cwd: taskCwd });
 
