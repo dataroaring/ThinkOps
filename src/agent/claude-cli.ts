@@ -143,7 +143,7 @@ export const claudeCli: AgentCLI = {
   async execute(prompt, opts) {
     const args = [
       "-p", prompt,
-      "--output-format", "stream-json",
+      "--output-format", "stream-json", "--verbose",
       "--dangerously-skip-permissions",
     ];
     if (opts?.model) args.push("--model", opts.model);
@@ -153,7 +153,7 @@ export const claudeCli: AgentCLI = {
   async resume(sessionId, prompt, opts) {
     const args = [
       "-p", prompt,
-      "--output-format", "stream-json",
+      "--output-format", "stream-json", "--verbose",
       "--dangerously-skip-permissions",
       "--resume", sessionId,
     ];
