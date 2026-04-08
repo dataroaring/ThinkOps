@@ -199,6 +199,7 @@ export class Orchestrator {
 
         const costStr = extractFrontmatterField(content, "estimated_cost");
         const estimatedCost = costStr ? parseFloat(costStr) : Infinity;
+        console.log(`[task-loop]   scanned: ${f} → status=${status}, cost=${estimatedCost === Infinity ? "none" : estimatedCost}`);
         tasks.push({ name: f.replace(".md", ""), path, status, description, estimatedCost });
       }
       return tasks;
