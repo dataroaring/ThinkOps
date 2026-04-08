@@ -68,6 +68,7 @@ export async function spawn(
     turns: result.turns,
     sessionId: result.sessionId,
     humanInputNeeded: !!humanInputNeeded,
+    output: result.output,
   });
 
   return { ...result, template: templateName, humanInputNeeded };

@@ -10,6 +10,7 @@ interface LogEntry {
   turns?: number;
   sessionId: string;
   humanInputNeeded: boolean;
+  output?: string;
 }
 
 function formatEntry(entry: LogEntry): string {
@@ -17,7 +18,12 @@ function formatEntry(entry: LogEntry): string {
   const cost = entry.cost != null ? ` | cost: $${entry.cost.toFixed(4)}` : "";
   const turns = entry.turns != null ? ` | turns: ${entry.turns}` : "";
   const human = entry.humanInputNeeded ? " | **HUMAN INPUT NEEDED**" : "";
-  return `- ${ts} | \`${entry.template}\` | ${entry.agent}/${entry.model} | ${entry.elapsed}${cost}${turns}${human}\n`;
+  let line = `- ${ts} | \`${entry.template}\` | ${entry.agent}/${entry.model} | ${entry.elapsed}${cost}${turns}${human}\n`;
+  if (entry.output) {
+    const preview = entry.output.slice(0, 300).replace(/\n/g, "\n    ");
+    line += `    > ${preview}${entry.output.length > 300 ? "..." : ""}\n`;
+  }
+  return line;
 }
 
 export async function appendRunLog(

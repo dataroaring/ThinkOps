@@ -1,4 +1,4 @@
-import { readFile, readdir, stat, mkdir } from "fs/promises";
+import { readFile, readdir, stat, mkdir, appendFile } from "fs/promises";
 import { resolve, join } from "path";
 import { homedir } from "os";
 import type { Config } from "./config.js";
@@ -151,27 +151,43 @@ export class Orchestrator {
       skill_context: skillContext,
     }, { cwd: taskCwd });
 
+    // Log agent output for visibility
+    const outputPreview = result.output.slice(0, 500);
+    console.log(`[task-loop] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
+
     // Step 3: Handle human input if needed
     if (result.humanInputNeeded) {
       console.log(`[task-loop] human input needed: ${result.humanInputNeeded}`);
       try {
         const answer = await this.bot.askQuestion(result.humanInputNeeded);
-        // Resume the agent session with the answer
         const resumed = await resume(
           this.config,
           result.sessionId,
           `The user answered: ${answer}\n\nPlease continue executing the task.`,
         );
-        await this.bot.notify(
+        this.bot.notify(
           `Task *${next.name}* resumed.\n${resumed.humanInputNeeded ? "More input needed." : "Completed."}`
-        );
+        ).catch(() => {});
       } catch (err) {
         console.error(`[task-loop] Q&A failed for ${next.name}:`, err);
         this.bot.notify(`Task *${next.name}* timed out waiting for input.`).catch(() => {});
       }
     } else {
-      console.log(`[task-loop] task completed: ${next.name}`);
-      this.bot.notify(`Task *${next.name}* completed.`).catch(() => {});
+      // Verify the task file was actually updated
+      const updatedContent = await readFile(next.path, "utf-8");
+      const updatedStatus = extractFrontmatterField(updatedContent, "status");
+      const stillHasUnchecked = /- \[ \]/.test(updatedContent);
+
+      if (updatedStatus === "done" || !stillHasUnchecked) {
+        console.log(`[task-loop] task completed: ${next.name}`);
+        this.bot.notify(`Task *${next.name}* completed.`).catch(() => {});
+      } else {
+        // Agent didn't update the file — mark it to avoid infinite loop
+        console.warn(`[task-loop] agent did not update task file. Marking as blocked.`);
+        const blockedNote = `\n\n> [!warning] ThinkOps: Agent completed without updating this file. Review agent output in thinkops/_run_log.md\n`;
+        await appendFile(next.path, blockedNote);
+        this.bot.notify(`Task *${next.name}*: agent finished but didn't update the file. Check _run_log.md`).catch(() => {});
+      }
     }
   }
 
