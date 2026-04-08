@@ -3,18 +3,6 @@ import type { AgentCLI, CLIResult } from "./types.js";
 
 const DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 
-interface StreamEvent {
-  type: string;
-  subtype?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  content?: string;
-  result?: string;
-  session_id?: string;
-  cost_usd?: number;
-  num_turns?: number;
-}
-
 function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult> {
   return new Promise((resolve, reject) => {
     const proc = spawnProcess("claude", args, {
@@ -39,32 +27,51 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
     proc.stdout?.on("data", (chunk: Buffer) => {
       buffer += chunk.toString();
 
-      // Process complete lines
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
-          const event: StreamEvent = JSON.parse(line);
-          logEvent(event);
-
-          // Capture final result data
-          if (event.session_id) sessionId = event.session_id;
-          if (event.cost_usd != null) cost = event.cost_usd;
-          if (event.num_turns != null) turns = event.num_turns;
-          if (event.result != null) lastResult = event.result;
-
-          // Capture assistant text content
-          if (event.type === "assistant" && event.content) {
-            lastResult = event.content;
-          }
+          const event = JSON.parse(line);
+          processEvent(event);
         } catch {
-          // Not JSON, log raw
-          if (line.trim()) console.log(`[claude]   ${line.trim()}`);
+          // Not JSON
         }
       }
     });
+
+    function processEvent(event: Record<string, unknown>): void {
+      const type = event.type as string;
+      if (event.session_id) sessionId = event.session_id as string;
+
+      if (type === "assistant") {
+        // Tool use and text are inside message.content array
+        const msg = event.message as Record<string, unknown> | undefined;
+        const content = msg?.content as Array<Record<string, unknown>> | undefined;
+        if (content) {
+          for (const block of content) {
+            if (block.type === "tool_use") {
+              const name = block.name as string;
+              const input = block.input as Record<string, unknown>;
+              const detail = summarizeTool(name, input);
+              console.log(`[claude]   🔧 ${name}${detail}`);
+            } else if (block.type === "text") {
+              const text = (block.text as string).trim();
+              if (text) lastResult = text;
+            }
+          }
+        }
+      } else if (type === "result") {
+        const resultText = event.result as string | undefined;
+        if (resultText) lastResult = resultText;
+        cost = event.total_cost_usd as number | undefined;
+        turns = event.num_turns as number | undefined;
+        const duration = event.duration_ms as number | undefined;
+        const secs = duration ? (duration / 1000).toFixed(1) : "?";
+        console.log(`[claude]   ✅ done (${turns ?? "?"} turns, $${cost?.toFixed(4) ?? "?"}, ${secs}s)`);
+      }
+    }
 
     let stderr = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
@@ -74,15 +81,9 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
     proc.on("close", (code) => {
       clearTimeout(timer);
 
-      // Process remaining buffer
       if (buffer.trim()) {
         try {
-          const event: StreamEvent = JSON.parse(buffer);
-          if (event.session_id) sessionId = event.session_id;
-          if (event.cost_usd != null) cost = event.cost_usd;
-          if (event.num_turns != null) turns = event.num_turns;
-          if (event.result != null) lastResult = event.result;
-          if (event.type === "assistant" && event.content) lastResult = event.content;
+          processEvent(JSON.parse(buffer));
         } catch {
           if (!lastResult) lastResult = buffer;
         }
@@ -103,35 +104,26 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
   });
 }
 
-function logEvent(event: StreamEvent): void {
-  switch (event.type) {
-    case "assistant":
-      if (event.subtype === "tool_use" && event.tool_name) {
-        const input = event.tool_input ?? {};
-        const detail = summarizeToolInput(event.tool_name, input);
-        console.log(`[claude]   🔧 ${event.tool_name}${detail}`);
-      }
-      break;
-    case "result":
-      console.log(`[claude]   ✅ done (${event.num_turns} turns, $${event.cost_usd?.toFixed(4) ?? "?"})`);
-      break;
-  }
-}
-
-function summarizeToolInput(tool: string, input: Record<string, unknown>): string {
-  switch (tool) {
+function summarizeTool(name: string, input: Record<string, unknown>): string {
+  switch (name) {
     case "Read":
       return `: ${input.file_path ?? ""}`;
     case "Write":
       return `: ${input.file_path ?? ""}`;
     case "Edit":
       return `: ${input.file_path ?? ""}`;
-    case "Bash":
-      return `: ${String(input.command ?? "").slice(0, 80)}`;
+    case "Bash": {
+      const cmd = String(input.command ?? "").split("\n")[0].slice(0, 80);
+      return `: ${cmd}`;
+    }
     case "Grep":
       return `: "${input.pattern ?? ""}"`;
     case "Glob":
       return `: ${input.pattern ?? ""}`;
+    case "LSP":
+      return `: ${input.operation ?? ""}`;
+    case "Agent":
+      return `: ${input.description ?? ""}`;
     default:
       return "";
   }
