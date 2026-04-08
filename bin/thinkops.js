@@ -6,4 +6,8 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const entry = resolve(__dirname, "../src/index.ts");
 
-execFileSync("npx", ["tsx", entry], { stdio: "inherit", cwd: resolve(__dirname, "..") });
+try {
+  execFileSync("npx", ["tsx", entry], { stdio: "inherit", cwd: resolve(__dirname, "..") });
+} catch {
+  process.exit(1);
+}

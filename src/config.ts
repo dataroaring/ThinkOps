@@ -26,8 +26,14 @@ const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>;
 
+const ENV_TO_FIELD: Record<string, string> = {
+  telegramBotToken: "TELEGRAM_BOT_TOKEN",
+  telegramChatId: "TELEGRAM_CHAT_ID",
+  vaultPath: "VAULT_PATH",
+};
+
 export function loadConfig(): Config {
-  return configSchema.parse({
+  const result = configSchema.safeParse({
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
     telegramChatId: process.env.TELEGRAM_CHAT_ID,
     vaultPath: process.env.VAULT_PATH,
@@ -38,4 +44,20 @@ export function loadConfig(): Config {
     skillOrganizeInterval: process.env.SKILL_ORGANIZE_INTERVAL,
     knowledgeLintInterval: process.env.KNOWLEDGE_LINT_INTERVAL,
   });
+
+  if (!result.success) {
+    const missing = result.error.issues.map((i) => {
+      const field = String(i.path[0]);
+      const envVar = ENV_TO_FIELD[field] ?? field;
+      return `  ${envVar}: ${i.message}`;
+    });
+    console.error("\n[thinkops] Configuration error:\n");
+    console.error(missing.join("\n"));
+    console.error("\nCreate a .env file (see .env.example):\n");
+    console.error("  cp .env.example .env");
+    console.error("  # then fill in the required values\n");
+    process.exit(1);
+  }
+
+  return result.data;
 }
