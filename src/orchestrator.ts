@@ -62,22 +62,36 @@ export class Orchestrator {
     this.running = true;
 
     // Ensure vault folders exist
+    console.log("[orchestrator] ensuring vault structure...");
     await this.ensureVaultStructure();
 
     // Start Telegram bot
-    await this.bot.start();
+    console.log("[orchestrator] connecting telegram bot...");
+    try {
+      await this.bot.start();
+    } catch (err) {
+      console.error("[orchestrator] telegram bot failed to start:", err instanceof Error ? err.message : err);
+      console.error("[orchestrator] continuing without telegram. Run: thinkops --check");
+    }
 
     // Start task loop
+    console.log("[orchestrator] starting task loop (poll every %ds)...", this.config.taskPollInterval);
     this.startTaskLoop();
 
     // Start knowledge watcher
+    console.log("[orchestrator] starting knowledge watcher...");
     this.startKnowledgeWatcher();
 
     // Start skill loops
+    console.log("[orchestrator] starting skill loops...");
     this.startSkillLoops();
 
     console.log("[orchestrator] all loops started");
-    await this.bot.notify("ThinkOps started. All loops active.");
+    try {
+      await this.bot.notify("ThinkOps started. All loops active.");
+    } catch {
+      // Telegram not available, already logged above
+    }
   }
 
   stop(): void {
@@ -122,7 +136,7 @@ export class Orchestrator {
     if (!next) return;
 
     console.log(`[task-loop] executing: ${next.name}`);
-    await this.bot.notify(`Starting task: *${next.name}*`);
+    this.bot.notify(`Starting task: *${next.name}*`).catch(() => {});
 
     // Step 1: Select relevant skills
     const skillContext = await this.loadSkillContext(next.description);
@@ -149,10 +163,11 @@ export class Orchestrator {
         );
       } catch (err) {
         console.error(`[task-loop] Q&A failed for ${next.name}:`, err);
-        await this.bot.notify(`Task *${next.name}* timed out waiting for input.`);
+        this.bot.notify(`Task *${next.name}* timed out waiting for input.`).catch(() => {});
       }
     } else {
-      await this.bot.notify(`Task *${next.name}* completed.`);
+      console.log(`[task-loop] task completed: ${next.name}`);
+      this.bot.notify(`Task *${next.name}* completed.`).catch(() => {});
     }
   }
 

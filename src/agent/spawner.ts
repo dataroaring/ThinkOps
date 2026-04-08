@@ -48,12 +48,14 @@ export async function spawn(
   }
 
   const agent = getAgent(config);
+  console.log(`[spawn] ${agent.name} running "${templateName}"...`);
   const start = Date.now();
   const result = await agent.execute(prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
     model: config.agentModel,
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  console.log(`[spawn] "${templateName}" completed in ${elapsed}s`);
 
   const humanInputNeeded = extractHumanInput(result.output);
 
