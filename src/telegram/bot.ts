@@ -76,8 +76,15 @@ export class TelegramBot {
   }
 
   async start(): Promise<void> {
-    await this.bot.launch();
-    console.log("[telegram] bot started");
+    // launch() starts long polling in the background — don't await it
+    // as it only resolves when the bot stops
+    this.bot.launch().catch((err) => {
+      console.error("[telegram] bot error:", err instanceof Error ? err.message : err);
+    });
+
+    // Verify connection with a quick getMe call
+    const me = await this.bot.telegram.getMe();
+    console.log(`[telegram] bot started: @${me.username}`);
   }
 
   stop(): void {

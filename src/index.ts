@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   console.log(`[thinkops] vault: ${config.vaultPath}`);
   console.log(`[thinkops] agent: ${config.agentCli}/${config.agentModel}`);
+  console.log("[thinkops] initializing...");
 
   const orchestrator = new Orchestrator(config);
 
