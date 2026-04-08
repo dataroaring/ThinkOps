@@ -40,9 +40,14 @@ npm install
 cp .env.example .env
 # Edit .env with your Telegram bot token, chat ID, and vault path
 
+# Install CLI globally
+npm link
+
 # Run
-npm run dev
+thinkops
 ```
+
+You can also run without global install via `npm run dev`.
 
 ### Environment Variables
 
