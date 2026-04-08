@@ -180,8 +180,23 @@ export class Orchestrator {
         if (!f.endsWith(".md")) continue;
         const path = join(dir, f);
         const content = await readFile(path, "utf-8");
-        const status = extractFrontmatterField(content, "status") ?? "unknown";
-        const description = extractSection(content, "Description");
+
+        // Use frontmatter status if present, otherwise infer from checkboxes
+        let status = extractFrontmatterField(content, "status");
+        if (!status) {
+          const hasUnchecked = /- \[ \]/.test(content);
+          const hasChecked = /- \[x\]/i.test(content);
+          if (hasUnchecked) status = "todo";
+          else if (hasChecked) status = "done";
+          else status = "unknown";
+        }
+
+        // Use ## Description if present, otherwise use full content as description
+        let description = extractSection(content, "Description");
+        if (!description) {
+          description = content.replace(/^---[\s\S]*?^---\s*/m, "").trim();
+        }
+
         const costStr = extractFrontmatterField(content, "estimated_cost");
         const estimatedCost = costStr ? parseFloat(costStr) : Infinity;
         tasks.push({ name: f.replace(".md", ""), path, status, description, estimatedCost });
