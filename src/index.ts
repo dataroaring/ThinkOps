@@ -1,7 +1,15 @@
 import { loadConfig } from "./config.js";
 import { Orchestrator } from "./orchestrator.js";
+import { runCheck } from "./check.js";
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+
+  if (args.includes("--check")) {
+    await runCheck();
+    return;
+  }
+
   console.log("[thinkops] loading config...");
   const config = loadConfig();
   console.log(`[thinkops] vault: ${config.vaultPath}`);

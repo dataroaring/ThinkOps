@@ -106,11 +106,19 @@ export class Orchestrator {
     poll();
   }
 
+  private taskPollCount = 0;
+
   private async runTaskLoop(): Promise<void> {
+    this.taskPollCount++;
     const tasks = await this.scanTasks();
-    const next = tasks
-      .filter((t) => t.status === "todo")
-      .sort((a, b) => a.estimatedCost - b.estimatedCost)[0];
+    const todo = tasks.filter((t) => t.status === "todo");
+    const done = tasks.filter((t) => t.status === "done");
+    const next = todo.sort((a, b) => a.estimatedCost - b.estimatedCost)[0];
+
+    console.log(
+      `[task-loop] poll #${this.taskPollCount}: ${tasks.length} tasks (${todo.length} todo, ${done.length} done)${next ? ` — next: ${next.name}` : " — idle"}`
+    );
+
     if (!next) return;
 
     console.log(`[task-loop] executing: ${next.name}`);
