@@ -89,8 +89,9 @@ export class Orchestrator {
     console.log("[orchestrator] all loops started");
     try {
       await this.bot.notify("ThinkOps started. All loops active.");
-    } catch {
-      // Telegram not available, already logged above
+      console.log("[orchestrator] startup notification sent to telegram");
+    } catch (err) {
+      console.error("[orchestrator] failed to send startup notification:", err instanceof Error ? err.message : err);
     }
   }
 
