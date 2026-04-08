@@ -166,7 +166,7 @@ export class Orchestrator {
       task_path: next.path,
       task_content: taskContent,
       skill_context: skillContext,
-    }, { cwd: taskCwd });
+    }, { cwd: taskCwd, label: next.name });
 
     // Log agent output for visibility
     const outputPreview = result.output.slice(0, 500);

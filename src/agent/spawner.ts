@@ -36,7 +36,7 @@ export async function spawn(
   config: Config,
   templateName: string,
   vars: Record<string, string>,
-  opts?: { cwd?: string; extraContext?: string }
+  opts?: { cwd?: string; extraContext?: string; label?: string }
 ): Promise<SpawnResult> {
   let prompt = await loadTemplate(templateName, {
     vault_path: config.vaultPath,
@@ -48,7 +48,8 @@ export async function spawn(
   }
 
   const agent = getAgent(config);
-  console.log(`[spawn] ${agent.name} running "${templateName}"...`);
+  const label = opts?.label ? ` (${opts.label})` : "";
+  console.log(`[spawn] ${agent.name} running "${templateName}"${label}...`);
   const start = Date.now();
   const result = await agent.execute(prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
