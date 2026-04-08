@@ -9,11 +9,11 @@ export interface AgentCLI {
   name: string;
   execute(
     prompt: string,
-    opts?: { cwd?: string; model?: string }
+    opts?: { cwd?: string; model?: string; timeout?: number }
   ): Promise<CLIResult>;
   resume(
     sessionId: string,
     prompt: string,
-    opts?: { cwd?: string }
+    opts?: { cwd?: string; timeout?: number }
   ): Promise<CLIResult>;
 }

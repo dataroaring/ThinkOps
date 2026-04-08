@@ -126,7 +126,7 @@ async function testTemplates(): Promise<void> {
   // Test variable interpolation
   const taskExecutor = await readFile(resolve(promptsDir, "task-executor.md"), "utf-8");
   assert(taskExecutor.includes("{task_path}"), "task-executor has {task_path} placeholder");
-  assert(taskExecutor.includes("{vault_path}"), "task-executor has {vault_path} placeholder");
+  assert(taskExecutor.includes("{task_content}"), "task-executor has {task_content} placeholder");
   assert(taskExecutor.includes("HUMAN_INPUT_NEEDED"), "task-executor documents HUMAN_INPUT_NEEDED sentinel");
 
   // Simulate interpolation

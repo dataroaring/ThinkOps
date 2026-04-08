@@ -1,15 +1,29 @@
 import { execFile } from "child_process";
 import type { AgentCLI, CLIResult } from "./types.js";
 
-function run(args: string[], cwd?: string): Promise<string> {
+const DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+
+function run(args: string[], cwd?: string, timeout?: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("claude", args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(`claude CLI failed: ${err.message}\nstderr: ${stderr}`));
-        return;
+    const proc = execFile(
+      "claude",
+      args,
+      { cwd, maxBuffer: 10 * 1024 * 1024, timeout: timeout ?? DEFAULT_TIMEOUT },
+      (err, stdout, stderr) => {
+        if (err) {
+          if ((err as NodeJS.ErrnoException & { killed?: boolean }).killed) {
+            reject(new Error(`claude CLI timed out after ${(timeout ?? DEFAULT_TIMEOUT) / 1000}s`));
+            return;
+          }
+          reject(new Error(`claude CLI failed: ${err.message}\nstderr: ${stderr}`));
+          return;
+        }
+        resolve(stdout);
       }
-      resolve(stdout);
-    });
+    );
+
+    // Close stdin immediately so agent can't wait for interactive input
+    proc.stdin?.end();
   });
 }
 
@@ -31,15 +45,24 @@ export const claudeCli: AgentCLI = {
   name: "claude",
 
   async execute(prompt, opts) {
-    const args = ["-p", prompt, "--output-format", "json"];
+    const args = [
+      "-p", prompt,
+      "--output-format", "json",
+      "--dangerously-skip-permissions",
+    ];
     if (opts?.model) args.push("--model", opts.model);
-    const raw = await run(args, opts?.cwd);
+    const raw = await run(args, opts?.cwd, opts?.timeout);
     return parseOutput(raw);
   },
 
   async resume(sessionId, prompt, opts) {
-    const args = ["-p", prompt, "--output-format", "json", "--resume", sessionId];
-    const raw = await run(args, opts?.cwd);
+    const args = [
+      "-p", prompt,
+      "--output-format", "json",
+      "--dangerously-skip-permissions",
+      "--resume", sessionId,
+    ];
+    const raw = await run(args, opts?.cwd, opts?.timeout);
     return parseOutput(raw);
   },
 };
