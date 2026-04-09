@@ -26,7 +26,10 @@ export class Orchestrator {
     this.bot.onCommand("tasks", async () => {
       const tasks = await this.scanTasks();
       if (tasks.length === 0) return "No pending tasks.";
-      return tasks.map((t) => `- ${t.name} (${t.status})`).join("\n");
+      return tasks.map((t) => {
+        const name = t.taskName.length > 50 ? t.taskName.slice(0, 47) + "..." : t.taskName;
+        return `- [${t.category}] ${name} (${t.status})`;
+      }).join("\n");
     });
 
     this.bot.onCommand("query", async (args) => {
@@ -145,8 +148,9 @@ export class Orchestrator {
     const done = tasks.filter((t) => t.status === "done");
     const next = todo.sort((a, b) => a.estimatedCost - b.estimatedCost)[0];
 
+    const shortTask = next.taskName.length > 60 ? next.taskName.slice(0, 57) + "..." : next.taskName;
     console.log(
-      `[task-loop] poll #${this.taskPollCount}: ${tasks.length} tasks (${todo.length} todo, ${done.length} done)${next ? ` — next: ${next.name}` : " — idle"}`
+      `[task-loop] poll #${this.taskPollCount}: ${tasks.length} tasks (${todo.length} todo, ${done.length} done)${next ? ` — next: ${shortTask}` : " — idle"}`
     );
 
     if (!next) return;
@@ -154,8 +158,8 @@ export class Orchestrator {
     // Extract code directory from task context if present
     const cwdMatch = next.description.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
-    console.log(`[task-loop] executing: ${next.name}${taskCwd ? ` (cwd: ${taskCwd})` : ""}`);
-    this.bot.notify(`Starting task: *${next.name}*`).catch(() => {});
+    console.log(`[task-loop] executing [${next.category}]: ${shortTask}${taskCwd ? ` (cwd: ${taskCwd})` : ""}`);
+    this.bot.notify(`Starting task [${next.category}]: *${shortTask}*`).catch(() => {});
 
     // Step 1: Select relevant skills
     const skillContext = await this.loadSkillContext(next.description);
@@ -166,7 +170,7 @@ export class Orchestrator {
       task_path: next.path,
       task_content: taskContent,
       skill_context: skillContext,
-    }, { cwd: taskCwd, label: next.name });
+    }, { cwd: taskCwd, label: `${next.category}: ${shortTask}` });
 
     // Log agent output for visibility
     const outputPreview = result.output.slice(0, 500);
@@ -187,8 +191,8 @@ export class Orchestrator {
         const resumePreview = current.output.slice(0, 300);
         console.log(`[task-loop] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
       } catch (err) {
-        console.error(`[task-loop] Q&A failed for ${next.name}:`, err);
-        this.bot.notify(`Task *${next.name}* timed out waiting for input.`).catch(() => {});
+        console.error(`[task-loop] Q&A failed for ${shortTask}:`, err);
+        this.bot.notify(`Task [${next.category}] *${shortTask}* timed out waiting for input.`).catch(() => {});
         break;
       }
     }
@@ -200,14 +204,21 @@ export class Orchestrator {
       const stillHasUnchecked = /- \[ \]/.test(updatedContent);
 
       if (updatedStatus === "done" || !stillHasUnchecked) {
-        console.log(`[task-loop] task completed: ${next.name}`);
-        this.bot.notify(`Task *${next.name}* completed.`).catch(() => {});
+        console.log(`[task-loop] task completed: ${shortTask}`);
+        const details = extractKeyDetails(current.output);
+        const summary = [
+          `✅ *Task completed* [${next.category}]`,
+          `*${next.taskName}*`,
+          details ? `\n${details}` : "",
+          current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
+        ].filter(Boolean).join("\n");
+        this.bot.notify(summary).catch(() => {});
       } else {
         // Agent didn't update the file — mark it to avoid infinite loop
         console.warn(`[task-loop] agent did not update task file. Marking as blocked.`);
         const blockedNote = `\n\n> [!warning] ThinkOps: Agent completed without updating this file. Review agent output in thinkops/_run_log.md\n`;
         await appendFile(next.path, blockedNote);
-        this.bot.notify(`Task *${next.name}*: agent finished but didn't update the file. Check _run_log.md`).catch(() => {});
+        this.bot.notify(`⚠️ [${next.category}] *${shortTask}*: agent finished but didn't update the file.`).catch(() => {});
       }
     }
   }
@@ -240,8 +251,11 @@ export class Orchestrator {
 
         const costStr = extractFrontmatterField(content, "estimated_cost");
         const estimatedCost = costStr ? parseFloat(costStr) : Infinity;
-        console.log(`[task-loop]   scanned: ${f} → status=${status}, cost=${estimatedCost === Infinity ? "none" : estimatedCost}`);
-        tasks.push({ name: f.replace(".md", ""), path, status, description, estimatedCost });
+        const category = f.replace(".md", "");
+        const taskName = extractFirstUnchecked(content) ?? category;
+        const shortName = taskName.length > 60 ? taskName.slice(0, 57) + "..." : taskName;
+        console.log(`[task-loop]   scanned: ${f} → status=${status}, task="${shortName}"`);
+        tasks.push({ category, taskName, path, status, description, estimatedCost });
       }
       return tasks;
     } catch {
@@ -420,11 +434,37 @@ export class Orchestrator {
 // ── Helpers ────────────────────────────────────────────
 
 interface TaskInfo {
-  name: string;
+  category: string;
+  taskName: string;
   path: string;
   status: string;
   description: string;
   estimatedCost: number;
+}
+
+function extractFirstUnchecked(content: string): string | undefined {
+  const match = content.match(/- \[ \]\s*(.+)/);
+  return match?.[1]?.trim();
+}
+
+function extractKeyDetails(output: string): string {
+  const details: string[] = [];
+  // Extract URLs (PRs, issues, etc.)
+  const urls = output.match(/https?:\/\/github\.com\/[^\s)>\]]+/g);
+  if (urls) {
+    for (const url of [...new Set(urls)]) {
+      if (url.includes("/pull/")) details.push(`PR: ${url}`);
+      else if (url.includes("/issues/")) details.push(`Issue: ${url}`);
+      else details.push(`Link: ${url}`);
+    }
+  }
+  // Extract branch names
+  const branch = output.match(/branch[:\s]+`?([^\s`]+)`?/i);
+  if (branch) details.push(`Branch: ${branch[1]}`);
+  // Extract file changes
+  const files = output.match(/Files changed[\s\S]*?(?=\n\n|\n#|$)/i);
+  if (files) details.push(files[0].trim());
+  return details.join("\n");
 }
 
 function extractFrontmatterField(
