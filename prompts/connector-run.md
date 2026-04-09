@@ -10,25 +10,34 @@ Path: `{connector_path}`
 {connector_content}
 ```
 
-## Audit Log (already completed tasks — do NOT redo these)
+## Audit Log (completed tasks and check history — use this to avoid loops)
 
 ```
 {audit_log}
 ```
 
+The audit log has two entry types:
+- `DONE | **task-id** | title | result` — this task was completed. Do NOT redo it.
+- `CHECKED | no new tasks` — the connector was checked at this time and nothing new was found.
+
 ## Instructions
 
 ### Phase 1: Fetch the next task
 
-1. Read the connector above to understand the task source.
-2. Based on the source description, **fetch available tasks**:
+1. Read the connector above to understand the task source and its filters.
+2. **Check the audit log** before fetching:
+   - Note the **last CHECKED or DONE timestamp** — this is when the connector was last processed.
+   - Note all **DONE task IDs** — these are already handled.
+3. **Fetch available tasks** from the source, applying the connector's filters:
    - **Jira**: Use `curl` to call the Jira REST API with the provided URL, credentials, and filter. Parse the response to find open issues.
-   - **GitHub Issues**: Use `gh issue list` or the GitHub API with the provided repo and filters.
+   - **GitHub Issues**: Use `gh issue list` or the GitHub API with the provided repo and filters. Use `--sort updated` and filter by date if possible to only see items updated since the last check.
    - **Manual/inline list**: Look for unchecked `- [ ]` items in the connector file itself.
    - **Any other source**: Follow the instructions in the connector.
-3. **Skip** any task whose ID appears in the Audit Log above.
-4. Pick the **first available task** that is not in the audit log.
-5. If no tasks are available, output exactly: `NO_TASKS_AVAILABLE` and stop.
+4. **Filter out already-handled work**:
+   - Skip any task whose ID appears as DONE in the audit log.
+   - Skip items that have not changed since the last CHECKED timestamp (e.g., same comments, same status). If you already handled an issue's comments and there are no new comments, it is not new work.
+5. Pick the **first genuinely new task** that needs work.
+6. If nothing new is available, output exactly: `NO_TASKS_AVAILABLE` and stop.
 
 ### Phase 2: Execute the task
 
@@ -67,6 +76,7 @@ Then STOP immediately. Your question will be forwarded via Telegram.
 
 - You are AUTONOMOUS. Never ask interactive questions. Never wait for user input.
 - Always output either `NO_TASKS_AVAILABLE` or `TASK_COMPLETED` (or `HUMAN_INPUT_NEEDED`).
+- **AVOID LOOPS**: If the audit log shows a task was already DONE, do NOT redo it. If nothing has changed since the last CHECKED timestamp, output `NO_TASKS_AVAILABLE`. Never re-process the same issue, comment, or item unless there is genuinely new content.
 - Follow ALL context instructions — they are not suggestions, they are requirements.
 - Execute only ONE task per run. Do not batch multiple tasks.
 - If a task is too complex, do what you can, describe what remains in the result.

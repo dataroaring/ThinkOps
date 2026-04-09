@@ -197,11 +197,12 @@ export class Orchestrator {
     // Parse result
     if (current.output.includes("NO_TASKS_AVAILABLE")) {
       console.log(`[task-loop] [${connector.name}]: no tasks available`);
+      await this.appendAuditCheck(connector.name);
     } else {
       const completed = parseTaskCompleted(current.output);
       if (completed) {
         console.log(`[task-loop] [${connector.name}] completed: ${completed.id} — ${completed.title}`);
-        await this.appendAuditLog(connector.name, completed);
+        await this.appendAuditTask(connector.name, completed);
         const details = extractKeyDetails(current.output);
         const summary = [
           `✅ *Task completed* [${connector.name}]`,
@@ -241,16 +242,27 @@ export class Orchestrator {
     }
   }
 
-  private async appendAuditLog(
+  private auditPath(connectorName: string): string {
+    return resolve(this.config.vaultPath, "thinkops/audit", `${connectorName}.md`);
+  }
+
+  private async appendAuditTask(
     connectorName: string,
     task: { id: string; title: string; result: string }
   ): Promise<void> {
     const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
     await mkdir(auditDir, { recursive: true });
-    const logPath = resolve(auditDir, `${connectorName}.md`);
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-    const entry = `- ${now} | **${task.id}** | ${task.title} | ${task.result}\n`;
-    await appendFile(logPath, entry);
+    const entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
+    await appendFile(this.auditPath(connectorName), entry);
+  }
+
+  private async appendAuditCheck(connectorName: string): Promise<void> {
+    const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
+    await mkdir(auditDir, { recursive: true });
+    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const entry = `- ${now} | CHECKED | no new tasks\n`;
+    await appendFile(this.auditPath(connectorName), entry);
   }
 
   private async loadSkillContext(taskDescription: string): Promise<string> {
