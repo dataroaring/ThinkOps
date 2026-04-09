@@ -6,7 +6,7 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 
 | Loop | What it does |
 |------|-------------|
-| **Task Loop** | Scans Obsidian `connectors/` for pending tasks → selects relevant skills → executes via CLI agent → asks questions via Telegram → updates progress in Obsidian |
+| **Task Loop** | Cycles through `connectors/` → agent fetches next task from source (Jira, GitHub, inline list) → executes it → logs to audit trail → notifies via Telegram |
 | **Knowledge Loop** | Watches `knowledge/sources/` for new files → ingests into a persistent wiki → periodic quality linting → queryable via Telegram |
 | **Skill Loop** | Reads Claude Code conversation history → extracts reusable skills → auto-organizes hierarchy → improves via feedback |
 
@@ -14,7 +14,7 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 
 ```
 Orchestrator (thin TypeScript plumbing)
-  ├── Task Loop (poll connectors/, pick cheapest pending, execute)
+  ├── Task Loop (round-robin connectors/, agent fetches + executes)
   ├── Knowledge Loop (watch sources/, ingest, lint)
   └── Skill Loop (extract from history, organize)
         │
@@ -67,7 +67,7 @@ You can also run without global install via `npm run dev`.
 
 ```
 ~/Documents/Obsidian Vault/
-  connectors/             # Task sources — each file has context + task checkboxes
+  connectors/             # Task sources (Jira, GitHub Issues, manual lists, etc.)
   knowledge/
     _schema.md            # Wiki conventions (agent instructions)
     _index.md             # Content catalog
@@ -84,43 +84,64 @@ You can also run without global install via `npm run dev`.
     devops/
   thinkops/
     _run_log.md           # All agent activity (append-only)
+    audit/                # Per-connector audit logs (completed task history)
 ```
 
 ## Connector Format
 
-A **connector** is a task source in Obsidian. Each `.md` file in `connectors/` contains context (how to work) and tasks (checkboxes). The agent interprets the connector dynamically — no rigid format required.
+A **connector** is an endless task source. Each `.md` file in `connectors/` describes where to fetch tasks and how to work on them. The agent interprets the connector dynamically — no rigid format required.
 
+### Jira Connector
 ```markdown
-# Context
-code directory: /path/to/project
+## Source
+Jira: https://company.atlassian.net
+Auth: use JIRA_TOKEN environment variable
+Filter: project = DORIS AND status = "To Do" AND priority >= High
+
+## Context
+code directory: /path/to/incubator-doris
 using git worktree from upstream/master to isolate tasks.
-create pr to org/repo
+create pr to apache/doris
+```
 
-# tasks
-- [ ] Fix the memory leak in backend
-- [x] Add retry logic to RPC client
-  - **PR**: https://github.com/org/repo/pull/123
+### GitHub Issues Connector
+```markdown
+## Source
+GitHub Issues: apache/doris
+Filter: state:open assignee:dataroaring label:bug
 
-# Progress log
-- 2026-04-08: Connector created
+## Context
+code directory: /path/to/incubator-doris
+create pr to apache/doris
+```
+
+### Manual Task List
+```markdown
+## Source
+Manual task list below.
+
+## Tasks
+- [ ] Fix the memory leak in BE
+- [ ] Add retry logic to RPC client
+
+## Context
+code directory: /path/to/project
 ```
 
 **How it works:**
-- The `# Context` section tells the agent HOW to work (code directory, workflow, PR target, etc.)
-- Each `- [ ]` is a pending task. The agent picks the first unchecked one.
-- When done, the agent marks it `[x]` with notes and adds a progress log entry.
-- Connectors are scheduled **cheapest-first** by optional `estimated_cost` frontmatter. Connectors without a cost estimate run last.
-- Add new connectors anytime in Obsidian — they'll be picked up on the next poll.
-- Add tasks to existing connectors — just append `- [ ] description`.
+- The agent reads the connector, fetches the next task from the source, executes it, and reports back.
+- The `## Context` section tells the agent HOW to work (code directory, workflow, PR target, etc.).
+- Completed tasks are tracked in `thinkops/audit/<connector>.md` — the agent skips already-done tasks.
+- Connectors are cycled round-robin. Add new connectors anytime in Obsidian.
+- Each poll processes one task from one connector. The loop never ends — connectors keep producing tasks.
 
 ## Telegram Commands
 
 | Command | Description |
 |---------|-------------|
 | `/status` | Show ThinkOps status |
-| `/connectors` | List connectors with pending task counts |
-| `/tasks` | List all pending tasks across connectors |
-| `/todo <connector> <desc>` | Add a task to a connector (creates it if new) |
+| `/connectors` | List all connectors with completed task counts |
+| `/audit <name>` | Show audit log for a connector |
 | `/query <question>` | Query the knowledge wiki |
 | `/lint` | Run knowledge wiki audit |
 | `/skills` | Show skill tree |

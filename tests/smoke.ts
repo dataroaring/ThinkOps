@@ -110,7 +110,7 @@ async function testTemplates(): Promise<void> {
   const files = await readdir(promptsDir);
 
   const expectedTemplates = [
-    "task-executor.md",
+    "connector-run.md",
     "knowledge-ingest.md",
     "knowledge-query.md",
     "knowledge-lint.md",
@@ -123,131 +123,102 @@ async function testTemplates(): Promise<void> {
     assert(files.includes(tmpl), `Template exists: ${tmpl}`);
   }
 
-  // Test variable interpolation
-  const taskExecutor = await readFile(resolve(promptsDir, "task-executor.md"), "utf-8");
-  assert(taskExecutor.includes("{task_path}"), "task-executor has {task_path} placeholder");
-  assert(taskExecutor.includes("{task_content}"), "task-executor has {task_content} placeholder");
-  assert(taskExecutor.includes("HUMAN_INPUT_NEEDED"), "task-executor documents HUMAN_INPUT_NEEDED sentinel");
+  // Test variable interpolation on connector-run
+  const connectorRun = await readFile(resolve(promptsDir, "connector-run.md"), "utf-8");
+  assert(connectorRun.includes("{connector_path}"), "connector-run has {connector_path} placeholder");
+  assert(connectorRun.includes("{connector_content}"), "connector-run has {connector_content} placeholder");
+  assert(connectorRun.includes("{audit_log}"), "connector-run has {audit_log} placeholder");
+  assert(connectorRun.includes("HUMAN_INPUT_NEEDED"), "connector-run documents HUMAN_INPUT_NEEDED sentinel");
+  assert(connectorRun.includes("TASK_COMPLETED"), "connector-run documents TASK_COMPLETED sentinel");
+  assert(connectorRun.includes("NO_TASKS_AVAILABLE"), "connector-run documents NO_TASKS_AVAILABLE sentinel");
 
   // Simulate interpolation
-  const interpolated = taskExecutor.replace(/\{(\w+)\}/g, (_, key) => {
+  const interpolated = connectorRun.replace(/\{(\w+)\}/g, (_, key) => {
     const vars: Record<string, string> = {
-      task_path: "/vault/tasks/test.md",
-      vault_path: "/vault",
+      connector_path: "/vault/connectors/test.md",
+      connector_content: "# Source\nManual list",
+      audit_log: "(empty)",
       skill_context: "No skills.",
     };
     return vars[key] ?? `{${key}}`;
   });
-  assert(interpolated.includes("/vault/tasks/test.md"), "Interpolation replaces {task_path}");
-  assert(!interpolated.includes("{task_path}"), "No unreplaced {task_path} after interpolation");
+  assert(interpolated.includes("/vault/connectors/test.md"), "Interpolation replaces {connector_path}");
+  assert(!interpolated.includes("{connector_path}"), "No unreplaced {connector_path} after interpolation");
 }
 
-// ── Test 4: Connector scanning & cost sorting ────────
+// ── Test 4: Connector listing & audit log ────────────
 
 async function testConnectorScanning(): Promise<void> {
-  console.log("\n[Test] Connector scanning & cost-first sorting");
+  console.log("\n[Test] Connector listing & audit log");
 
-  // Create test connectors with different costs and pending tasks
+  // Create test connectors
   await writeFile(
-    resolve(TEST_DIR, "connectors/expensive-project.md"),
-    `---
-estimated_cost: 0.50
----
-# Context
-code directory: /tmp/expensive
+    resolve(TEST_DIR, "connectors/doris.md"),
+    `## Source
+GitHub Issues: apache/doris
+Filter: state:open assignee:dataroaring
 
-# tasks
-- [ ] Do something costly
-- [ ] Another expensive task
-
-# Progress log
-- 2026-04-08: Created
+## Context
+code directory: /Users/qingyu/dataroaring/incubator-doris
+using git worktree from upstream/master to isolate tasks.
+create pr to apache/doris
 `
   );
 
   await writeFile(
-    resolve(TEST_DIR, "connectors/cheap-project.md"),
-    `---
-estimated_cost: 0.02
----
-# Context
-code directory: /tmp/cheap
+    resolve(TEST_DIR, "connectors/my-project.md"),
+    `## Source
+Jira: https://company.atlassian.net
+Auth: use JIRA_TOKEN environment variable
+Filter: project = MYPROJ AND status = "To Do"
 
-# tasks
-- [ ] Do something simple
-
-# Progress log
-- 2026-04-08: Created
+## Context
+code directory: /tmp/my-project
 `
   );
 
-  await writeFile(
-    resolve(TEST_DIR, "connectors/no-cost-project.md"),
-    `# Context
-code directory: /tmp/unknown
+  // _meta files should be skipped
+  await writeFile(resolve(TEST_DIR, "connectors/_template.md"), "# Template\nNot a connector.");
 
-# tasks
-- [ ] Unknown cost task
-
-# Progress log
-- 2026-04-08: Created
-`
-  );
-
-  await writeFile(
-    resolve(TEST_DIR, "connectors/done-project.md"),
-    `# Context
-code directory: /tmp/done
-
-# tasks
-- [x] Already finished task
-
-# Progress log
-- 2026-04-07: Completed
-`
-  );
-
-  // Simulate scanConnectors logic from orchestrator
-  const { readdir: rd, readFile: rf } = await import("fs/promises");
+  // Simulate listConnectors logic
+  const { readdir: rd } = await import("fs/promises");
   const dir = resolve(TEST_DIR, "connectors");
   const files = await rd(dir);
+  const connectors = files
+    .filter((f: string) => f.endsWith(".md") && !f.startsWith("_"))
+    .map((f: string) => ({ name: f.replace(".md", ""), path: resolve(dir, f) }));
 
-  interface ConnectorInfo {
-    name: string;
-    pendingCount: number;
-    estimatedCost: number;
-  }
+  assert(connectors.length === 2, `Found 2 connectors, skipped _template (got ${connectors.length})`);
+  assert(connectors.some((c: { name: string }) => c.name === "doris"), "Found doris connector");
+  assert(connectors.some((c: { name: string }) => c.name === "my-project"), "Found my-project connector");
 
-  const connectors: ConnectorInfo[] = [];
-  for (const f of files) {
-    if (!f.endsWith(".md") || f.startsWith("_")) continue;
-    const content = await rf(resolve(dir, f), "utf-8");
-    const pendingMatches = content.match(/- \[ \]/g) || [];
-    const costMatch = content.match(/^estimated_cost:\s*(.+)$/m);
-    connectors.push({
-      name: f.replace(".md", ""),
-      pendingCount: pendingMatches.length,
-      estimatedCost: costMatch ? parseFloat(costMatch[1]) : Infinity,
-    });
-  }
+  // Test TASK_COMPLETED parsing
+  const output1 = `Some agent output...\nTASK_COMPLETED\nid: DORIS-1234\ntitle: Fix BE memory leak\nresult: Created PR https://github.com/apache/doris/pull/999\n`;
+  const block = output1.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
+  assert(!!block, "Parses TASK_COMPLETED block");
+  const id = block![1].match(/^id:\s*(.+)$/m)?.[1]?.trim();
+  const title = block![1].match(/^title:\s*(.+)$/m)?.[1]?.trim();
+  const result = block![1].match(/^result:\s*(.+)$/m)?.[1]?.trim();
+  assert(id === "DORIS-1234", `Parsed task id: ${id}`);
+  assert(title === "Fix BE memory leak", `Parsed task title: ${title}`);
+  assert(result?.includes("PR"), `Parsed task result: ${result}`);
 
-  assert(connectors.length === 4, `Found 4 connectors (got ${connectors.length})`);
+  // Test NO_TASKS_AVAILABLE detection
+  const output2 = "Checked Jira, no open issues matching filter.\nNO_TASKS_AVAILABLE";
+  assert(output2.includes("NO_TASKS_AVAILABLE"), "Detects NO_TASKS_AVAILABLE");
 
-  const withPending = connectors
-    .filter((c) => c.pendingCount > 0)
-    .sort((a, b) => a.estimatedCost - b.estimatedCost);
-
-  assert(withPending.length === 3, `3 connectors with pending tasks (got ${withPending.length})`);
-  assert(withPending[0].name === "cheap-project", `Cheapest first: ${withPending[0].name}`);
-  assert(withPending[1].name === "expensive-project", `Expensive second: ${withPending[1].name}`);
-  assert(withPending[2].name === "no-cost-project", `No-cost last: ${withPending[2].name}`);
-  assert(withPending[2].estimatedCost === Infinity, "Missing cost defaults to Infinity");
-
-  // Verify pending task extraction
-  const expensive = connectors.find((c) => c.name === "expensive-project")!;
-  assert(expensive.pendingCount === 2, `Expensive has 2 pending (got ${expensive.pendingCount})`);
-  const done = connectors.find((c) => c.name === "done-project")!;
-  assert(done.pendingCount === 0, `Done has 0 pending (got ${done.pendingCount})`);
+  // Test audit log write + read
+  const auditDir = resolve(TEST_DIR, "thinkops/audit");
+  await mkdir(auditDir, { recursive: true });
+  const auditPath = resolve(auditDir, "doris.md");
+  const { appendFile: af, readFile: rf2 } = await import("fs/promises");
+  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  await af(auditPath, `- ${now} | **DORIS-1234** | Fix BE memory leak | PR #999\n`);
+  await af(auditPath, `- ${now} | **DORIS-5678** | Add retry logic | PR #1000\n`);
+  const auditLog = await rf2(auditPath, "utf-8");
+  assert(auditLog.includes("DORIS-1234"), "Audit log contains first task");
+  assert(auditLog.includes("DORIS-5678"), "Audit log contains second task");
+  assert(auditLog.split("\n").filter((l: string) => l.startsWith("- ")).length === 2, "Audit log has 2 entries");
 }
 
 // ── Test 5: CLI adapter types ────────────────────────
