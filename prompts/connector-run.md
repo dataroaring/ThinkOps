@@ -57,7 +57,12 @@ Output your plan (subtasks + confidence) briefly before proceeding. Do NOT use `
 
 1. Read the **Context** section of the connector. Every line is an instruction — follow them.
 2. Execute according to your plan. Use your judgment to handle whatever situation you encounter.
-3. Aim for completeness — address everything the task requires, not just the easiest part.
+3. **PR review comment disposition** (when working on a PR): If the PR has unresolved review comments (from humans, Copilot, or other reviewers), you MUST disposition each one:
+   - **Addressed**: describe the change you made to resolve it.
+   - **Dismissed with reason**: explain why the suggestion was not adopted (e.g., incorrect, doesn't apply, would regress).
+   - **Left for author**: explain why this requires the PR author's judgment (e.g., subjective style, domain knowledge needed).
+   Never leave comments in an ambiguous state — each must have a clear, individual disposition.
+4. Aim for completeness — address everything the task requires, not just the easiest part.
 
 ### Phase 4: Verify your work
 
@@ -81,6 +86,10 @@ TASK_COMPLETED
 id: <unique task identifier — e.g. Jira key DORIS-1234, GitHub issue #42, or a short slug>
 title: <short task title>
 result: <brief summary: what was done, PR URL, branch name, key files changed>
+dispositions: <optional, for PR tasks with review comments — one line per comment>
+  - Comment about X — Addressed in commit abc123
+  - Suggestion to rename Y — Dismissed: naming matches project convention
+  - Style preference on Z — Left for author: subjective choice
 ```
 
 For inline/manual tasks, also update the connector file: mark the item `[x]` and add notes.

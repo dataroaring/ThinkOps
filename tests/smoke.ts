@@ -203,6 +203,22 @@ code directory: /tmp/my-project
   assert(title === "Fix BE memory leak", `Parsed task title: ${title}`);
   assert(result?.includes("PR"), `Parsed task result: ${result}`);
 
+  // Test TASK_COMPLETED parsing with optional dispositions field
+  const output1d = `Some agent output...\nTASK_COMPLETED\nid: PROJ-42\ntitle: Fix PR review\nresult: Updated PR #5\ndispositions: \n  - Use std::string_view — Addressed in commit abc123\n  - Add null check — Dismissed: guaranteed non-null\n  - Rename tmp — Left for author\n`;
+  const blockD = output1d.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
+  assert(!!blockD, "Parses TASK_COMPLETED block with dispositions");
+  const dispMatch = blockD![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
+  assert(!!dispMatch, "Extracts dispositions field");
+  const dispositions = dispMatch![1].trim();
+  assert(dispositions.includes("Addressed"), `Dispositions contain Addressed: ${dispositions}`);
+  assert(dispositions.includes("Dismissed"), `Dispositions contain Dismissed: ${dispositions}`);
+  assert(dispositions.includes("Left for author"), `Dispositions contain Left for author: ${dispositions}`);
+
+  // Test TASK_COMPLETED parsing without dispositions (backwards compat)
+  const blockNd = output1.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
+  const noDisp = blockNd![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
+  assert(!noDisp, "No dispositions field when absent from output");
+
   // Test NO_TASKS_AVAILABLE detection
   const output2 = "Checked Jira, no open issues matching filter.\nNO_TASKS_AVAILABLE";
   assert(output2.includes("NO_TASKS_AVAILABLE"), "Detects NO_TASKS_AVAILABLE");

@@ -6,10 +6,78 @@ import { spawn, resume } from "./agent/spawner.js";
 import { TelegramBot } from "./telegram/bot.js";
 import { watchFolder } from "./utils/file-watcher.js";
 
+interface ActiveAgent {
+  connector: string;
+  phase: string;
+  taskId?: string;
+  startedAt: number;
+  phaseStartedAt: number;
+}
+
+/** Per-run logging context — every log line includes connector, run#, taskId, and phase. */
+class RunLog {
+  private phaseTimings: { phase: string; durationMs: number }[] = [];
+  private currentPhaseStart = 0;
+
+  constructor(
+    private connector: string,
+    private runNum: number,
+    private _taskId?: string,
+  ) {}
+
+  get taskId(): string | undefined { return this._taskId; }
+  set taskId(id: string | undefined) { this._taskId = id; }
+
+  private get prefix(): string {
+    const tag = this._taskId
+      ? `${this.connector}/${this._taskId}`
+      : this.connector;
+    return `${ts()} [${tag}]`;
+  }
+
+  log(msg: string): void {
+    console.log(`${this.prefix} ${msg}`);
+  }
+
+  warn(msg: string): void {
+    console.warn(`${this.prefix} ${msg}`);
+  }
+
+  error(msg: string, err?: unknown): void {
+    console.error(`${this.prefix} ${msg}`, err instanceof Error ? err.message : (err ?? ""));
+  }
+
+  startPhase(phase: string): void {
+    this.endPhase();
+    this.currentPhaseStart = Date.now();
+    this.log(`▸ ${phase}`);
+  }
+
+  endPhase(): void {
+    if (this.currentPhaseStart > 0) {
+      this.phaseTimings.push({
+        phase: this.phaseTimings.length.toString(),
+        durationMs: Date.now() - this.currentPhaseStart,
+      });
+      this.currentPhaseStart = 0;
+    }
+  }
+
+  summary(status: string): string {
+    this.endPhase();
+    const total = this.phaseTimings.reduce((s, p) => s + p.durationMs, 0);
+    return `${this.prefix} ✓ ${status} (total: ${formatDuration(total)})`;
+  }
+}
+
 export class Orchestrator {
   private bot: TelegramBot;
   private timers: NodeJS.Timeout[] = [];
   private running = false;
+  private startedAt = 0;
+  private activeAgents = new Map<string, ActiveAgent>();
+  private totalCompleted = 0;
+  private totalNoTasks = 0;
 
   constructor(private config: Config) {
     this.bot = new TelegramBot(config);
@@ -18,9 +86,28 @@ export class Orchestrator {
 
   private registerCommands(): void {
     this.bot.onCommand("status", async () => {
-      return "ThinkOps is running.\n" +
-        `Agent: ${this.config.agentCli}/${this.config.agentModel}\n` +
-        `Vault: ${this.config.vaultPath}`;
+      const uptime = this.startedAt ? formatDuration(Date.now() - this.startedAt) : "not started";
+      const connectorCount = this.connectorPolls.size;
+      const active = this.activeAgents.size;
+      const max = this.config.taskConcurrency;
+
+      const lines = [
+        `*ThinkOps* running for ${uptime}`,
+        `Agent: ${this.config.agentCli}/${this.config.agentModel}`,
+        `Connectors: ${connectorCount} | Agents: ${active}/${max}`,
+        `Completed: ${this.totalCompleted} | No tasks: ${this.totalNoTasks}`,
+      ];
+
+      if (active > 0) {
+        lines.push("\n*Active agents:*");
+        for (const [, agent] of this.activeAgents) {
+          const elapsed = formatDuration(Date.now() - agent.startedAt);
+          const task = agent.taskId ? ` (${agent.taskId})` : "";
+          lines.push(`  [${agent.connector}] ${agent.phase}${task} — ${elapsed}`);
+        }
+      }
+
+      return lines.join("\n");
     });
 
     this.bot.onCommand("connectors", async () => {
@@ -71,6 +158,7 @@ export class Orchestrator {
 
   async start(): Promise<void> {
     this.running = true;
+    this.startedAt = Date.now();
 
     // Ensure vault folders exist
     console.log("[orchestrator] ensuring vault structure...");
@@ -261,6 +349,7 @@ export class Orchestrator {
           console.log(`${ts()}   id:     ${completed.id}`);
           console.log(`${ts()}   title:  ${completed.title}`);
           console.log(`${ts()}   result: ${completed.result}`);
+          if (completed.dispositions) console.log(`${ts()}   dispositions:\n${completed.dispositions}`);
 
           // Run critic agent to challenge the result
           console.log(`${ts()} [${name}] running critic...`);
@@ -336,12 +425,15 @@ export class Orchestrator {
 
   private async appendAuditTask(
     connectorName: string,
-    task: { id: string; title: string; result: string }
+    task: { id: string; title: string; result: string; dispositions?: string }
   ): Promise<void> {
     const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
     await mkdir(auditDir, { recursive: true });
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-    const entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
+    let entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
+    if (task.dispositions) {
+      entry += `  dispositions:\n${task.dispositions.split("\n").map(l => `    ${l}`).join("\n")}\n`;
+    }
     await appendFile(this.auditPath(connectorName), entry);
   }
 
@@ -659,14 +751,17 @@ function ts(): string {
   return new Date().toISOString().slice(11, 19);
 }
 
-function parseTaskCompleted(output: string): { id: string; title: string; result: string } | null {
+function parseTaskCompleted(output: string): { id: string; title: string; result: string; dispositions?: string } | null {
   const block = output.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
   if (!block) return null;
   const lines = block[1];
   const id = lines.match(/^id:\s*(.+)$/m)?.[1]?.trim() ?? "unknown";
   const title = lines.match(/^title:\s*(.+)$/m)?.[1]?.trim() ?? "untitled";
   const result = lines.match(/^result:\s*(.+)$/m)?.[1]?.trim() ?? "";
-  return { id, title, result };
+  // dispositions is optional (PR tasks only) and may span multiple lines
+  const dispMatch = lines.match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
+  const dispositions = dispMatch?.[1]?.trim() || undefined;
+  return { id, title, result, dispositions };
 }
 
 function extractKeyDetails(output: string): string {
