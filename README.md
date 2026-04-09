@@ -1,22 +1,67 @@
 # ThinkOps
 
-Three-loop agent system that bridges **Obsidian** (task/knowledge management) with **Claude Code** (execution) and **Telegram** (human-in-the-loop Q&A), with self-improving skills.
+Three-loop agent system that bridges **Obsidian** (task/knowledge management) with **Claude Code** (execution) and **Telegram** (human-in-the-loop Q&A), with self-improving skills and deep thinking.
 
 ## Loops
 
 | Loop | What it does |
 |------|-------------|
-| **Task Loop** | Cycles through `connectors/` → agent fetches next task from source (Jira, GitHub, inline list) → executes it → eval reviews result → logs to audit trail → notifies via Telegram |
-| **Eval** | After each task completion, reviews quality → behavioral patterns → skills, code/prompt issues → thinkops connector, critical bugs → Telegram alert |
+| **Task Loop** | Parallel connector loops → pre-flight → agent fetches + executes → critic challenges → eval reviews → audit log → Telegram |
+| **Eval** | After each task, reviews quality → behavioral patterns → skills, code/prompt issues → thinkops connector, critical bugs → Telegram alert |
 | **Knowledge Loop** | Watches `knowledge/sources/` for new files → ingests into a persistent wiki → periodic quality linting → queryable via Telegram |
 | **Skill Loop** | Reads Claude Code conversation history → extracts reusable skills → auto-organizes hierarchy → improves via feedback |
+
+## Thinking Pipeline
+
+Every task goes through a multi-stage thinking pipeline. The orchestrator structurally enforces each stage — the agent can't skip them.
+
+```
+Pre-flight (read-only analysis)
+  ├── Investigate current state (PRs, branches, CI, issues)
+  ├── Analogical reasoning — find similar past tasks, apply lessons
+  ├── Failure memory — learn from past eval findings and mistakes
+  ├── Generate task-specific thinking dimensions
+  └── Output: state + lessons + dimensions + strategy
+
+Connector-run (fetch + think + execute + verify)
+  ├── Fetch next task from source
+  ├── Decompose into subtasks with ordering
+  ├── Rate confidence per decision (low → research or ask human)
+  ├── Execute with plan
+  └── Verify from 4 perspectives:
+        requester / code reviewer / user / maintainer
+
+Critic (adversarial challenge)
+  ├── Claimed vs actually done?
+  ├── What was missed?
+  ├── What could break?
+  ├── What was assumed without verification?
+  └── If needs_fix → resume agent to fix, then re-check
+
+Eval (quality review + learning)
+  ├── Generate task-specific review dimensions
+  ├── Score quality (1-10)
+  └── Route findings:
+        SKILL → saved for future runs
+        CODE → task added to thinkops connector
+        CRITICAL → Telegram alert
+```
+
+Key principles:
+- **No hardcoded checklists** — each agent generates task-specific thinking dimensions using LLM reasoning
+- **Confidence gating** — low confidence forces research or human input, prevents guessing
+- **Adversarial review** — critic agent challenges the result before acceptance
+- **Learning from history** — past eval findings and mistakes inform future planning
 
 ## Architecture
 
 ```
 Orchestrator (thin TypeScript plumbing)
-  ├── Task Loop (round-robin connectors/, agent fetches + executes)
-  │     └── Eval (reviews result → skills / thinkops tasks / alerts)
+  ├── Task Loops (parallel, one per connector, semaphore-limited)
+  │     ├── Pre-flight (analyze state, past lessons, dimensions)
+  │     ├── Connector-run (fetch + think + execute + verify)
+  │     ├── Critic (adversarial challenge, can trigger fix pass)
+  │     └── Eval (quality review → skills / thinkops tasks / alerts)
   ├── Knowledge Loop (watch sources/, ingest, lint)
   └── Skill Loop (extract from history, organize)
         │
@@ -140,18 +185,19 @@ code directory: /path/to/project
 ```
 
 **How it works:**
-- The agent reads the connector, fetches the next task from the source, executes it, and reports back.
-- The `## Context` section tells the agent HOW to work (code directory, workflow, PR target, etc.).
+- Each connector gets its own independent polling loop (parallel, not round-robin).
+- The agent reads the connector, fetches the next task, thinks about the best approach, executes, and reports back.
+- A critic agent challenges the result before acceptance. If issues are found, the agent gets a fix pass.
 - Completed tasks are tracked in `thinkops/audit/<connector>.md` — the agent skips already-done tasks.
-- Connectors are cycled round-robin. Add new connectors anytime in Obsidian.
-- Each poll processes one task from one connector. The loop never ends — connectors keep producing tasks.
+- Add new connectors anytime in Obsidian — they are auto-discovered.
+- Concurrency is controlled by `TASK_CONCURRENCY` (default 3 parallel agents).
 
 ## Self-Improvement
 
 After each task completion, an **eval agent** reviews the result and routes findings:
 
 ```
-Task completed → Eval reviews output
+Task completed → Critic challenges → Eval reviews output
   ├── SKILL: behavioral pattern   → saved as skill for future runs
   ├── CODE: prompt/code fix       → task added to thinkops connector
   └── CRITICAL: serious bug       → Telegram alert for human review
@@ -159,7 +205,23 @@ Task completed → Eval reviews output
 
 The `thinkops` connector points to the ThinkOps codebase itself. When the eval creates CODE tasks, ThinkOps picks them up and improves its own prompts, orchestrator, and adapters — then runs tests to verify.
 
+Past eval findings feed back into future pre-flight analyses, creating a learning loop:
+```
+Eval finding → thinkops connector / skill file
+  → loaded by pre-flight for next task
+    → agent avoids repeating the same mistake
+```
+
 Quality scores are recorded in the audit log (`EVAL | quality: 8/10`).
+
+## Smart Stuck Detection
+
+Instead of a fixed timeout, ThinkOps monitors agent activity:
+
+- **Idle detection** (`AGENT_IDLE_TIME`): If the agent produces no output for 5 minutes, it's likely stuck — kill it. An active agent making tool calls will never trigger this.
+- **Max time** (`AGENT_MAX_TIME`): 2-hour hard ceiling as a safety net.
+
+This prevents agents from wasting time on `sleep` loops or hanging on external processes.
 
 ## Telegram Commands
 
@@ -175,7 +237,7 @@ Quality scores are recorded in the audit log (`EVAL | quality: 8/10`).
 
 ## Human-in-the-Loop
 
-When an agent needs input, it outputs `HUMAN_INPUT_NEEDED: <question>`. The orchestrator sends the question to Telegram and waits for your reply, then resumes the agent session with your answer.
+When an agent needs input or has low confidence, it outputs `HUMAN_INPUT_NEEDED: <question>`. The orchestrator sends the question to Telegram and waits for your reply, then resumes the agent session with your answer.
 
 ```
 Agent → HUMAN_INPUT_NEEDED → Telegram → You reply → Agent resumes
@@ -202,10 +264,10 @@ src/
   index.ts              # Entry point + --check flag
   config.ts             # Zod-validated config from .env
   check.ts              # Health check (vault, CLI, Telegram)
-  orchestrator.ts       # Task loop, eval, knowledge & skill loops, Telegram commands
+  orchestrator.ts       # Parallel task loops, critic, eval, knowledge & skill loops
   agent/
-    types.ts            # AgentCLI interface + CLIResult
-    claude-cli.ts       # Claude Code adapter (stream-json)
+    types.ts            # AgentCLI + CLIResult + TimeoutOpts interfaces
+    claude-cli.ts       # Claude Code adapter (stream-json, idle detection)
     opencode-cli.ts     # OpenCode adapter
     spawner.ts          # Template loading + CLI dispatch + run logging
   telegram/
@@ -214,8 +276,10 @@ src/
     run-logger.ts       # Append to thinkops/_run_log.md
     file-watcher.ts     # chokidar wrapper
 prompts/                # Prompt templates (THE BRAIN)
-  connector-run.md      #   Fetch task from source + execute + report
-  eval-run.md           #   Review completed task → SKILL / CODE / CRITICAL
+  task-preflight.md     #   Pre-flight: analyze state, past lessons, dimensions
+  connector-run.md      #   Fetch + think + execute + verify
+  task-critique.md      #   Adversarial review of completed work
+  eval-run.md           #   Quality review → SKILL / CODE / CRITICAL
   knowledge-*.md        #   Ingest, query, lint
   skill-*.md            #   Extract, organize, select
 templates/              # Vault setup examples
