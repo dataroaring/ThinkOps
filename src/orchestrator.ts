@@ -85,8 +85,8 @@ export class Orchestrator {
       console.error("[orchestrator] continuing without telegram. Run: thinkops --check");
     }
 
-    // Start task loop
-    console.log("[orchestrator] starting task loop (poll every %ds)...", this.config.taskPollInterval);
+    // Start task loops (parallel, one per connector)
+    console.log("[orchestrator] starting task loops (concurrency=%d, poll every %ds)...", this.config.taskConcurrency, this.config.taskPollInterval);
     this.startTaskLoop();
 
     // Start knowledge watcher
@@ -114,15 +114,38 @@ export class Orchestrator {
     console.log("[orchestrator] stopped");
   }
 
-  // ── Task Loop (Connector-driven) ──────────────────────
+  // ── Task Loops (parallel, one per connector) ──────────
+
+  private semaphore = 0;
+  private connectorPolls = new Map<string, number>();
 
   private startTaskLoop(): void {
+    // Discover connectors and start a loop for each; re-scan periodically for new ones
+    const discover = async () => {
+      if (!this.running) return;
+      const connectors = await this.listConnectors();
+      for (const c of connectors) {
+        if (!this.connectorPolls.has(c.name)) {
+          this.connectorPolls.set(c.name, 0);
+          console.log(`${ts()} [orchestrator] starting loop for connector [${c.name}]`);
+          this.startConnectorLoop(c.name, c.path);
+        }
+      }
+      if (this.running) {
+        const timer = setTimeout(discover, this.config.taskPollInterval * 1000);
+        this.timers.push(timer);
+      }
+    };
+    discover();
+  }
+
+  private startConnectorLoop(name: string, path: string): void {
     const poll = async () => {
       if (!this.running) return;
       try {
-        await this.runTaskLoop();
+        await this.runConnector(name, path);
       } catch (err) {
-        console.error(`[task-loop ${ts()}] error:`, err);
+        console.error(`${ts()} [${name}] error:`, err);
       }
       if (this.running) {
         const timer = setTimeout(poll, this.config.taskPollInterval * 1000);
@@ -132,113 +155,123 @@ export class Orchestrator {
     poll();
   }
 
-  private taskPollCount = 0;
-
-  private async runTaskLoop(): Promise<void> {
-    this.taskPollCount++;
-    const connectors = await this.listConnectors();
-
-    if (connectors.length === 0) {
-      console.log(`${ts()} [poll #${this.taskPollCount}] no connectors found — idle`);
-      return;
+  private async acquireSlot(name: string): Promise<boolean> {
+    if (this.semaphore >= this.config.taskConcurrency) {
+      console.log(`${ts()} [${name}] waiting for slot (${this.semaphore}/${this.config.taskConcurrency} active)`);
+      // Wait until a slot opens, checking every 5s
+      while (this.semaphore >= this.config.taskConcurrency && this.running) {
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      if (!this.running) return false;
     }
+    this.semaphore++;
+    console.log(`${ts()} [${name}] acquired slot (${this.semaphore}/${this.config.taskConcurrency} active)`);
+    return true;
+  }
 
-    // Round-robin through connectors
-    const idx = (this.taskPollCount - 1) % connectors.length;
-    const connector = connectors[idx];
-    const connectorNames = connectors.map((c) => c.name).join(", ");
+  private releaseSlot(name: string): void {
+    this.semaphore--;
+    console.log(`${ts()} [${name}] released slot (${this.semaphore}/${this.config.taskConcurrency} active)`);
+  }
 
-    console.log(`${ts()} ─── poll #${this.taskPollCount} ───────────────────────────`);
-    console.log(`${ts()} connectors: [${connectorNames}]`);
-    console.log(`${ts()} selected: [${connector.name}] (${idx + 1}/${connectors.length})`);
+  private async runConnector(name: string, path: string): Promise<void> {
+    const pollNum = (this.connectorPolls.get(name) ?? 0) + 1;
+    this.connectorPolls.set(name, pollNum);
 
-    const content = await readFile(connector.path, "utf-8");
-    const auditLog = await this.loadAuditLog(connector.name);
+    console.log(`${ts()} ─── [${name}] poll #${pollNum} ───────────────────────`);
+
+    const content = await readFile(path, "utf-8");
+    const auditLog = await this.loadAuditLog(name);
     const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
-    console.log(`${ts()} [${connector.name}] audit: ${doneCount} tasks completed previously`);
+    console.log(`${ts()} [${name}] audit: ${doneCount} tasks completed previously`);
 
     // Extract code directory from connector context
     const cwdMatch = content.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
-    if (taskCwd) console.log(`${ts()} [${connector.name}] cwd: ${taskCwd}`);
+    if (taskCwd) console.log(`${ts()} [${name}] cwd: ${taskCwd}`);
 
-    // Select relevant skills
-    console.log(`${ts()} [${connector.name}] loading skills...`);
-    const skillContext = await this.loadSkillContext(content);
+    // Acquire concurrency slot before spawning agent
+    if (!(await this.acquireSlot(name))) return;
 
-    // Spawn agent: fetch task from source + execute + report
-    console.log(`${ts()} [${connector.name}] spawning agent: fetch → execute → report`);
-    this.bot.notify(`Checking connector [${connector.name}]...`).catch(() => {});
+    try {
+      // Select relevant skills
+      console.log(`${ts()} [${name}] loading skills...`);
+      const skillContext = await this.loadSkillContext(content);
 
-    const result = await spawn(this.config, "connector-run", {
-      connector_path: connector.path,
-      connector_content: content,
-      audit_log: auditLog || "(empty — no tasks completed yet)",
-      skill_context: skillContext,
-    }, { cwd: taskCwd, label: connector.name });
+      // Spawn agent: fetch task from source + execute + report
+      console.log(`${ts()} [${name}] spawning agent: fetch → execute → report`);
+      this.bot.notify(`Checking connector [${name}]...`).catch(() => {});
 
-    // Log output
-    const outputPreview = result.output.slice(0, 500);
-    console.log(`${ts()} [${connector.name}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
+      const result = await spawn(this.config, "connector-run", {
+        connector_path: path,
+        connector_content: content,
+        audit_log: auditLog || "(empty — no tasks completed yet)",
+        skill_context: skillContext,
+      }, { cwd: taskCwd, label: name });
 
-    // Handle human input loop
-    let current = result;
-    while (current.humanInputNeeded) {
-      console.log(`${ts()} [${connector.name}] ⏳ waiting for human input: ${current.humanInputNeeded}`);
-      try {
-        const answer = await this.bot.askQuestion(current.humanInputNeeded);
-        console.log(`${ts()} [${connector.name}] user replied: ${answer}`);
-        console.log(`${ts()} [${connector.name}] resuming agent session ${current.sessionId}...`);
-        current = await resume(
-          this.config,
-          current.sessionId,
-          `The user answered: ${answer}\n\nPlease continue executing the task.`,
-        );
-        const resumePreview = current.output.slice(0, 300);
-        console.log(`${ts()} [${connector.name}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
-      } catch (err) {
-        console.error(`${ts()} [${connector.name}] Q&A timed out:`, err);
-        this.bot.notify(`[${connector.name}] timed out waiting for input.`).catch(() => {});
-        break;
+      // Log output
+      const outputPreview = result.output.slice(0, 500);
+      console.log(`${ts()} [${name}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
+
+      // Handle human input loop
+      let current = result;
+      while (current.humanInputNeeded) {
+        console.log(`${ts()} [${name}] waiting for human input: ${current.humanInputNeeded}`);
+        try {
+          const answer = await this.bot.askQuestion(current.humanInputNeeded);
+          console.log(`${ts()} [${name}] user replied: ${answer}`);
+          console.log(`${ts()} [${name}] resuming agent session ${current.sessionId}...`);
+          current = await resume(
+            this.config,
+            current.sessionId,
+            `The user answered: ${answer}\n\nPlease continue executing the task.`,
+          );
+          const resumePreview = current.output.slice(0, 300);
+          console.log(`${ts()} [${name}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
+        } catch (err) {
+          console.error(`${ts()} [${name}] Q&A timed out:`, err);
+          this.bot.notify(`[${name}] timed out waiting for input.`).catch(() => {});
+          break;
+        }
       }
-    }
 
-    // Parse result
-    if (current.output.includes("NO_TASKS_AVAILABLE")) {
-      console.log(`${ts()} [${connector.name}] result: no new tasks available`);
-      await this.appendAuditCheck(connector.name);
-      console.log(`${ts()} [${connector.name}] audit: CHECKED recorded`);
-    } else {
-      const completed = parseTaskCompleted(current.output);
-      if (completed) {
-        console.log(`${ts()} [${connector.name}] ✅ task completed:`);
-        console.log(`${ts()}   id:     ${completed.id}`);
-        console.log(`${ts()}   title:  ${completed.title}`);
-        console.log(`${ts()}   result: ${completed.result}`);
-        if (current.cost) console.log(`${ts()}   cost:   $${current.cost.toFixed(4)}`);
-        if (current.turns) console.log(`${ts()}   turns:  ${current.turns}`);
-        await this.appendAuditTask(connector.name, completed);
-        console.log(`${ts()} [${connector.name}] audit: DONE recorded`);
+      // Parse result
+      if (current.output.includes("NO_TASKS_AVAILABLE")) {
+        console.log(`${ts()} [${name}] result: no new tasks available`);
+        await this.appendAuditCheck(name);
+      } else {
+        const completed = parseTaskCompleted(current.output);
+        if (completed) {
+          console.log(`${ts()} [${name}] task completed:`);
+          console.log(`${ts()}   id:     ${completed.id}`);
+          console.log(`${ts()}   title:  ${completed.title}`);
+          console.log(`${ts()}   result: ${completed.result}`);
+          if (current.cost) console.log(`${ts()}   cost:   $${current.cost.toFixed(4)}`);
+          if (current.turns) console.log(`${ts()}   turns:  ${current.turns}`);
+          await this.appendAuditTask(name, completed);
 
-        const details = extractKeyDetails(current.output);
-        const summary = [
-          `✅ *Task completed* [${connector.name}]`,
-          `*${completed.title}*`,
-          completed.result ? `\n${completed.result}` : "",
-          details ? `\n${details}` : "",
-          current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
-        ].filter(Boolean).join("\n");
-        this.bot.notify(summary).catch(() => {});
+          const details = extractKeyDetails(current.output);
+          const summary = [
+            `*Task completed* [${name}]`,
+            `*${completed.title}*`,
+            completed.result ? `\n${completed.result}` : "",
+            details ? `\n${details}` : "",
+            current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
+          ].filter(Boolean).join("\n");
+          this.bot.notify(summary).catch(() => {});
 
-        // Run eval agent on the completed task
-        console.log(`${ts()} [${connector.name}] running eval on completed task...`);
-        await this.runEval(connector.name, content, completed, current.output);
-      } else if (!current.humanInputNeeded) {
-        console.warn(`${ts()} [${connector.name}] ⚠️ agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE`);
-        this.bot.notify(`⚠️ [${connector.name}]: agent finished without reporting task completion. Check thinkops/_run_log.md`).catch(() => {});
+          // Run eval agent on the completed task
+          console.log(`${ts()} [${name}] running eval...`);
+          await this.runEval(name, content, completed, current.output);
+        } else if (!current.humanInputNeeded) {
+          console.warn(`${ts()} [${name}] agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE`);
+          this.bot.notify(`[${name}]: agent finished without reporting task completion.`).catch(() => {});
+        }
       }
+    } finally {
+      this.releaseSlot(name);
     }
-    console.log(`${ts()} ─── poll #${this.taskPollCount} done ──────────────────────`);
+    console.log(`${ts()} ─── [${name}] poll #${pollNum} done ──────────────────`);
   }
 
   // ── Connector & Audit ───────────────────────────────

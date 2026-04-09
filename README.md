@@ -67,7 +67,8 @@ You can also run without global install via `npm run dev`.
 | `AGENT_MODEL` | Model name passed to the CLI | `sonnet` |
 | `AGENT_MAX_TIME` | Hard ceiling per agent run (seconds) | `7200` (2h) |
 | `AGENT_IDLE_TIME` | Kill agent if no output for this long (seconds) | `300` (5min) |
-| `TASK_POLL_INTERVAL` | Seconds between task scans | `30` |
+| `TASK_CONCURRENCY` | Max parallel connector agent runs | `3` |
+| `TASK_POLL_INTERVAL` | Seconds between connector polls | `30` |
 | `SKILL_EXTRACT_INTERVAL` | Seconds between skill extractions | `3600` |
 | `SKILL_ORGANIZE_INTERVAL` | Seconds between skill reorganizations | `86400` |
 | `KNOWLEDGE_LINT_INTERVAL` | Seconds between knowledge lint runs | `86400` |
