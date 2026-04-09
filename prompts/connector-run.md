@@ -40,15 +40,11 @@ A planning agent has already investigated the current state and recommended a st
 
 ### Phase 2: Think about the best approach
 
-Before doing any work, think through these dimensions to build a complete strategy:
+The pre-flight analysis identified **key dimensions** for this task — the perspectives you must reason through. Read them carefully and think through each one before doing any work.
 
-1. **Scope** — What exactly does this task require? What are the boundaries? What is in scope and out of scope?
-2. **State** — What is the current state of the codebase, PRs, branches, dependencies? What does the pre-flight analysis say? What existing work must be accounted for?
-3. **Approach** — What is the best strategy? Are there multiple ways? Which produces the highest-quality result? If unsure about technologies or patterns, **search the web** for docs and best practices.
-4. **Risks** — What could go wrong? What are the side effects of your changes? What assumptions might be wrong?
-5. **Dependencies** — What does this task depend on? What depends on this task? What order should things be done in?
+Additionally, consider: are there dimensions the pre-flight missed? Based on the specific task you fetched, identify any additional dimensions that matter. Different tasks need different thinking — a bug fix, a feature, a PR review, a conflict resolution each have unique concerns.
 
-Output your plan briefly before proceeding. Do NOT use `sleep` or poll for external processes.
+Output your plan briefly before proceeding. Do NOT use `sleep` or poll for external processes. If unsure about technologies or patterns, **search the web** first.
 
 ### Phase 3: Execute the task
 
@@ -58,14 +54,12 @@ Output your plan briefly before proceeding. Do NOT use `sleep` or poll for exter
 
 ### Phase 4: Verify your work
 
-Before reporting completion, evaluate your result through these dimensions:
+Before reporting completion, go back to the dimensions from Phase 2 and verify your result against each one. Also ask yourself:
 
-1. **Correctness** — Did you actually solve the problem? Does the code compile, do tests pass, does it work?
-2. **Completeness** — Did you address everything the task requires? Re-read the original requirements. Did you skip anything?
-3. **Side effects** — Did your changes break anything else? Are there regressions, unintended consequences, or leftover debug code?
-4. **Deliverables** — Were all required outputs produced? PR created? Branch pushed? Files committed? Comments addressed?
+- Did I actually solve the problem, or just attempt it?
+- Would I be confident showing this result to the person who assigned the task?
 
-If you find gaps, **go back and fix them** before reporting. Never report a task as completed without passing all four checks.
+If you find gaps, **go back and fix them** before reporting.
 
 ### Phase 5: Report result
 
