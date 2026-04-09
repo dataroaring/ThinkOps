@@ -212,6 +212,9 @@ export class Orchestrator {
           current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
         ].filter(Boolean).join("\n");
         this.bot.notify(summary).catch(() => {});
+
+        // Run eval agent on the completed task
+        await this.runEval(connector.name, content, completed, current.output);
       } else if (!current.humanInputNeeded) {
         console.warn(`[task-loop ${ts()}] [${connector.name}]: agent finished without clear result`);
         this.bot.notify(`⚠️ [${connector.name}]: agent finished without reporting task completion. Check thinkops/_run_log.md`).catch(() => {});
@@ -263,6 +266,77 @@ export class Orchestrator {
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     const entry = `- ${now} | CHECKED | no new tasks\n`;
     await appendFile(this.auditPath(connectorName), entry);
+  }
+
+  // ── Eval ─────────────────────────────────────────────
+
+  private async runEval(
+    connectorName: string,
+    connectorContent: string,
+    task: { id: string; title: string; result: string },
+    agentOutput: string
+  ): Promise<void> {
+    console.log(`[eval ${ts()}] evaluating [${connectorName}] ${task.id}...`);
+    try {
+      const evalResult = await spawn(this.config, "eval-run", {
+        connector_content: connectorContent,
+        task_result: `${task.id}: ${task.title}\n${task.result}`,
+        agent_output: agentOutput.slice(0, 10_000),
+      }, { label: `eval: ${connectorName}/${task.id}` });
+
+      const evalOutput = evalResult.output;
+      const quality = evalOutput.match(/quality:\s*(\d+)/)?.[1] ?? "?";
+      console.log(`[eval ${ts()}] [${connectorName}] ${task.id}: quality ${quality}/10`);
+
+      // Annotate audit log with quality score
+      const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+      await appendFile(this.auditPath(connectorName),
+        `- ${now} | EVAL | **${task.id}** | quality: ${quality}/10\n`);
+
+      // Route findings
+      await this.routeEvalFindings(connectorName, task.id, evalOutput);
+    } catch (err) {
+      console.error(`[eval ${ts()}] error:`, err);
+    }
+  }
+
+  private async routeEvalFindings(
+    connectorName: string,
+    taskId: string,
+    evalOutput: string
+  ): Promise<void> {
+    const lines = evalOutput.split("\n");
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith("SKILL:")) {
+        const finding = trimmed.slice(6).trim();
+        console.log(`[eval ${ts()}] skill finding: ${finding}`);
+        // Feed into skill extraction — agent creates/updates skill files
+        try {
+          await spawn(this.config, "skill-extract", {
+            history_chunk: `Eval finding from [${connectorName}] task ${taskId}:\n${finding}`,
+          }, { label: `eval-skill: ${finding.slice(0, 40)}` });
+        } catch {
+          // Non-critical, log and continue
+        }
+      } else if (trimmed.startsWith("CODE:")) {
+        const finding = trimmed.slice(5).trim();
+        console.log(`[eval ${ts()}] code improvement: ${finding}`);
+        // Append to thinkops connector as a task
+        const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
+        const now = new Date().toISOString().slice(0, 10);
+        const entry = `- [ ] ${finding} _(from eval of [${connectorName}] ${taskId}, ${now})_\n`;
+        await appendFile(thinkopsPath, entry);
+      } else if (trimmed.startsWith("CRITICAL:")) {
+        const finding = trimmed.slice(9).trim();
+        console.error(`[eval ${ts()}] CRITICAL: ${finding}`);
+        this.bot.notify(
+          `🚨 *CRITICAL* [${connectorName}/${taskId}]\n${finding}`
+        ).catch(() => {});
+      }
+    }
   }
 
   private async loadSkillContext(taskDescription: string): Promise<string> {

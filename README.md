@@ -6,7 +6,8 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 
 | Loop | What it does |
 |------|-------------|
-| **Task Loop** | Cycles through `connectors/` → agent fetches next task from source (Jira, GitHub, inline list) → executes it → logs to audit trail → notifies via Telegram |
+| **Task Loop** | Cycles through `connectors/` → agent fetches next task from source (Jira, GitHub, inline list) → executes it → eval reviews result → logs to audit trail → notifies via Telegram |
+| **Eval** | After each task completion, reviews quality → behavioral patterns → skills, code/prompt issues → thinkops connector, critical bugs → Telegram alert |
 | **Knowledge Loop** | Watches `knowledge/sources/` for new files → ingests into a persistent wiki → periodic quality linting → queryable via Telegram |
 | **Skill Loop** | Reads Claude Code conversation history → extracts reusable skills → auto-organizes hierarchy → improves via feedback |
 
@@ -134,6 +135,21 @@ code directory: /path/to/project
 - Completed tasks are tracked in `thinkops/audit/<connector>.md` — the agent skips already-done tasks.
 - Connectors are cycled round-robin. Add new connectors anytime in Obsidian.
 - Each poll processes one task from one connector. The loop never ends — connectors keep producing tasks.
+
+## Self-Improvement
+
+After each task completion, an **eval agent** reviews the result and routes findings:
+
+```
+Task completed → Eval reviews output
+  ├── SKILL: behavioral pattern   → saved as skill for future runs
+  ├── CODE: prompt/code fix       → task added to thinkops connector
+  └── CRITICAL: serious bug       → Telegram alert for human review
+```
+
+The `thinkops` connector points to the ThinkOps codebase itself. When the eval creates CODE tasks, ThinkOps picks them up and improves its own prompts, orchestrator, and adapters — then runs tests to verify.
+
+Quality scores are recorded in the audit log (`EVAL | quality: 8/10`).
 
 ## Telegram Commands
 
