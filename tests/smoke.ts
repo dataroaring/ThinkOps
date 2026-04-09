@@ -17,7 +17,7 @@ function assert(condition: boolean, msg: string): void {
 }
 
 async function setup(): Promise<void> {
-  await mkdir(resolve(TEST_DIR, "tasks"), { recursive: true });
+  await mkdir(resolve(TEST_DIR, "connectors"), { recursive: true });
   await mkdir(resolve(TEST_DIR, "knowledge/sources"), { recursive: true });
   await mkdir(resolve(TEST_DIR, "skills"), { recursive: true });
   await mkdir(resolve(TEST_DIR, "thinkops"), { recursive: true });
@@ -142,126 +142,112 @@ async function testTemplates(): Promise<void> {
   assert(!interpolated.includes("{task_path}"), "No unreplaced {task_path} after interpolation");
 }
 
-// ── Test 4: Task scanning & cost sorting ─────────────
+// ── Test 4: Connector scanning & cost sorting ────────
 
-async function testTaskScanning(): Promise<void> {
-  console.log("\n[Test] Task scanning & cost-first sorting");
+async function testConnectorScanning(): Promise<void> {
+  console.log("\n[Test] Connector scanning & cost-first sorting");
 
-  // Create test tasks with different costs
+  // Create test connectors with different costs and pending tasks
   await writeFile(
-    resolve(TEST_DIR, "tasks/expensive-task.md"),
+    resolve(TEST_DIR, "connectors/expensive-project.md"),
     `---
-status: todo
-priority: high
 estimated_cost: 0.50
-created: 2026-04-08
 ---
-# Expensive Task
+# Context
+code directory: /tmp/expensive
 
-## Description
-An expensive task.
-
-## Keypoints
+# tasks
 - [ ] Do something costly
+- [ ] Another expensive task
 
-## Progress Log
+# Progress log
 - 2026-04-08: Created
 `
   );
 
   await writeFile(
-    resolve(TEST_DIR, "tasks/cheap-task.md"),
+    resolve(TEST_DIR, "connectors/cheap-project.md"),
     `---
-status: todo
-priority: low
 estimated_cost: 0.02
-created: 2026-04-08
 ---
-# Cheap Task
+# Context
+code directory: /tmp/cheap
 
-## Description
-A cheap task.
-
-## Keypoints
+# tasks
 - [ ] Do something simple
 
-## Progress Log
+# Progress log
 - 2026-04-08: Created
 `
   );
 
   await writeFile(
-    resolve(TEST_DIR, "tasks/no-cost-task.md"),
-    `---
-status: todo
-priority: medium
-created: 2026-04-08
----
-# No Cost Task
+    resolve(TEST_DIR, "connectors/no-cost-project.md"),
+    `# Context
+code directory: /tmp/unknown
 
-## Description
-A task without cost estimate.
+# tasks
+- [ ] Unknown cost task
 
-## Keypoints
-- [ ] Unknown cost
-
-## Progress Log
+# Progress log
 - 2026-04-08: Created
 `
   );
 
   await writeFile(
-    resolve(TEST_DIR, "tasks/done-task.md"),
-    `---
-status: done
-estimated_cost: 0.01
-created: 2026-04-07
----
-# Done Task
+    resolve(TEST_DIR, "connectors/done-project.md"),
+    `# Context
+code directory: /tmp/done
 
-## Description
-Already finished.
+# tasks
+- [x] Already finished task
 
-## Progress Log
+# Progress log
 - 2026-04-07: Completed
 `
   );
 
-  // Simulate scanTasks + cost sorting logic from orchestrator
+  // Simulate scanConnectors logic from orchestrator
   const { readdir: rd, readFile: rf } = await import("fs/promises");
-  const dir = resolve(TEST_DIR, "tasks");
+  const dir = resolve(TEST_DIR, "connectors");
   const files = await rd(dir);
 
-  interface TaskInfo {
+  interface ConnectorInfo {
     name: string;
-    status: string;
+    pendingCount: number;
     estimatedCost: number;
   }
 
-  const tasks: TaskInfo[] = [];
+  const connectors: ConnectorInfo[] = [];
   for (const f of files) {
-    if (!f.endsWith(".md")) continue;
+    if (!f.endsWith(".md") || f.startsWith("_")) continue;
     const content = await rf(resolve(dir, f), "utf-8");
-    const statusMatch = content.match(/^status:\s*(.+)$/m);
+    const pendingMatches = content.match(/- \[ \]/g) || [];
     const costMatch = content.match(/^estimated_cost:\s*(.+)$/m);
-    tasks.push({
+    connectors.push({
       name: f.replace(".md", ""),
-      status: statusMatch?.[1]?.trim() ?? "unknown",
+      pendingCount: pendingMatches.length,
       estimatedCost: costMatch ? parseFloat(costMatch[1]) : Infinity,
     });
   }
 
-  assert(tasks.length === 4, `Found 4 task files (got ${tasks.length})`);
+  assert(connectors.length === 4, `Found 4 connectors (got ${connectors.length})`);
 
-  const todoTasks = tasks
-    .filter((t) => t.status === "todo")
+  const withPending = connectors
+    .filter((c) => c.pendingCount > 0)
     .sort((a, b) => a.estimatedCost - b.estimatedCost);
 
-  assert(todoTasks.length === 3, `3 todo tasks (got ${todoTasks.length})`);
-  assert(todoTasks[0].name === "cheap-task", `Cheapest first: ${todoTasks[0].name}`);
-  assert(todoTasks[1].name === "expensive-task", `Expensive second: ${todoTasks[1].name}`);
-  assert(todoTasks[2].name === "no-cost-task", `No-cost last: ${todoTasks[2].name}`);
-  assert(todoTasks[2].estimatedCost === Infinity, "Missing cost defaults to Infinity");
+  assert(withPending.length === 3, `3 connectors with pending tasks (got ${withPending.length})`);
+  assert(withPending[0].name === "cheap-project", `Cheapest first: ${withPending[0].name}`);
+  assert(withPending[1].name === "expensive-project", `Expensive second: ${withPending[1].name}`);
+  assert(withPending[2].name === "no-cost-project", `No-cost last: ${withPending[2].name}`);
+  assert(withPending[2].estimatedCost === Infinity, "Missing cost defaults to Infinity");
+
+  // Verify pending task extraction
+  const expensive = connectors.find((c) => c.name === "expensive-project")!;
+  assert(expensive.pendingCount === 2, `Expensive has 2 pending (got ${expensive.pendingCount})`);
+  const done = connectors.find((c) => c.name === "done-project")!;
+  assert(done.pendingCount === 0, `Done has 0 pending (got ${done.pendingCount})`);
 }
 
 // ── Test 5: CLI adapter types ────────────────────────
@@ -288,7 +274,7 @@ async function testVaultTemplates(): Promise<void> {
   const templatesDir = resolve(import.meta.dirname!, "../templates");
   const knowledgeSchema = await readFile(resolve(templatesDir, "knowledge-schema.md"), "utf-8");
   const skillSchema = await readFile(resolve(templatesDir, "skill-schema.md"), "utf-8");
-  const taskExample = await readFile(resolve(templatesDir, "task-example.md"), "utf-8");
+  const connectorExample = await readFile(resolve(templatesDir, "connector-example.md"), "utf-8");
 
   assert(knowledgeSchema.includes("Entity Pages"), "Knowledge schema documents entity pages");
   assert(knowledgeSchema.includes("Topic Pages"), "Knowledge schema documents topic pages");
@@ -298,9 +284,9 @@ async function testVaultTemplates(): Promise<void> {
   assert(skillSchema.includes("Anti-patterns"), "Skill schema includes anti-patterns section");
   assert(skillSchema.includes("_tree.md"), "Skill schema references _tree.md");
 
-  assert(taskExample.includes("status: todo"), "Task example has status: todo");
-  assert(taskExample.includes("estimated_cost:"), "Task example has estimated_cost field");
-  assert(taskExample.includes("## Keypoints"), "Task example has Keypoints section");
+  assert(connectorExample.includes("# Context"), "Connector example has Context section");
+  assert(connectorExample.includes("code directory:"), "Connector example has code directory");
+  assert(connectorExample.includes("- [ ]"), "Connector example has pending tasks");
 }
 
 // ── Run all tests ────────────────────────────────────
@@ -314,7 +300,7 @@ async function main(): Promise<void> {
   await testConfig();
   await testRunLogger();
   await testTemplates();
-  await testTaskScanning();
+  await testConnectorScanning();
   await testAgentTypes();
   await testVaultTemplates();
 

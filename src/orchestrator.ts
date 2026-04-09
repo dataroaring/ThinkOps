@@ -23,13 +23,24 @@ export class Orchestrator {
         `Vault: ${this.config.vaultPath}`;
     });
 
-    this.bot.onCommand("tasks", async () => {
-      const tasks = await this.scanTasks();
-      if (tasks.length === 0) return "No pending tasks.";
-      return tasks.map((t) => {
-        const name = t.taskName.length > 50 ? t.taskName.slice(0, 47) + "..." : t.taskName;
-        return `- [${t.category}] ${name} (${t.status})`;
+    this.bot.onCommand("connectors", async () => {
+      const connectors = await this.scanConnectors();
+      if (connectors.length === 0) return "No connectors found.";
+      return connectors.map((c) => {
+        const pending = c.pendingTasks.length;
+        const first = c.pendingTasks[0];
+        const preview = first && first.length > 40 ? first.slice(0, 37) + "..." : first;
+        return `- *${c.name}*: ${pending} pending${preview ? ` — next: ${preview}` : ""}`;
       }).join("\n");
+    });
+
+    // Keep /tasks as alias
+    this.bot.onCommand("tasks", async () => {
+      const connectors = await this.scanConnectors();
+      const pending = connectors.flatMap((c) =>
+        c.pendingTasks.map((t) => `- [${c.name}] ${t.length > 50 ? t.slice(0, 47) + "..." : t}`)
+      );
+      return pending.length > 0 ? pending.join("\n") : "No pending tasks.";
     });
 
     this.bot.onCommand("query", async (args) => {
@@ -61,18 +72,25 @@ export class Orchestrator {
     });
 
     this.bot.onCommand("todo", async (args) => {
-      if (!args) return "Usage: /todo <task description>";
-      const slug = args
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 50);
-      const now = new Date().toISOString().slice(0, 10);
-      const fileName = `${slug}.md`;
-      const filePath = resolve(this.config.vaultPath, "tasks", fileName);
-      const content = `# tasks\n- [ ] ${args}\n\n## Progress Log\n- ${now}: Created via Telegram\n`;
-      await writeFile(filePath, content);
-      return `Task created: ${fileName}`;
+      if (!args) return "Usage: /todo <connector-name> <task description>\nExample: /todo doris fix the memory leak in BE";
+      const parts = args.split(/\s+/);
+      const connectorName = parts[0].toLowerCase();
+      const taskDesc = parts.slice(1).join(" ");
+      if (!taskDesc) return "Usage: /todo <connector-name> <task description>";
+      const filePath = resolve(this.config.vaultPath, "connectors", `${connectorName}.md`);
+      try {
+        // Append to existing connector
+        const content = await readFile(filePath, "utf-8");
+        const updated = content.trimEnd() + `\n- [ ] ${taskDesc}\n`;
+        await writeFile(filePath, updated);
+        return `Task added to connector *${connectorName}*: ${taskDesc}`;
+      } catch {
+        // Create new connector
+        const now = new Date().toISOString().slice(0, 10);
+        const content = `# Context\n\n# tasks\n- [ ] ${taskDesc}\n\n# Progress log\n- ${now}: Connector created via Telegram\n`;
+        await writeFile(filePath, content);
+        return `New connector *${connectorName}* created with task: ${taskDesc}`;
+      }
     });
   }
 
@@ -121,7 +139,7 @@ export class Orchestrator {
     console.log("[orchestrator] stopped");
   }
 
-  // ── Task Loop ──────────────────────────────────────────
+  // ── Task Loop (Connector-driven) ──────────────────────
 
   private startTaskLoop(): void {
     const poll = async () => {
@@ -143,34 +161,36 @@ export class Orchestrator {
 
   private async runTaskLoop(): Promise<void> {
     this.taskPollCount++;
-    const tasks = await this.scanTasks();
-    const todo = tasks.filter((t) => t.status === "todo");
-    const done = tasks.filter((t) => t.status === "done");
-    const next = todo.sort((a, b) => a.estimatedCost - b.estimatedCost)[0];
+    const connectors = await this.scanConnectors();
+    const withPending = connectors.filter((c) => c.pendingTasks.length > 0);
+    const totalPending = withPending.reduce((sum, c) => sum + c.pendingTasks.length, 0);
 
-    const shortTask = next.taskName.length > 60 ? next.taskName.slice(0, 57) + "..." : next.taskName;
+    // Pick the connector with the lowest estimated cost
+    const next = withPending.sort((a, b) => a.estimatedCost - b.estimatedCost)[0];
+    const nextTask = next?.pendingTasks[0];
+    const shortTask = nextTask && nextTask.length > 60 ? nextTask.slice(0, 57) + "..." : nextTask;
+
     console.log(
-      `[task-loop] poll #${this.taskPollCount}: ${tasks.length} tasks (${todo.length} todo, ${done.length} done)${next ? ` — next: ${shortTask}` : " — idle"}`
+      `[task-loop] poll #${this.taskPollCount}: ${connectors.length} connectors, ${totalPending} pending tasks${next ? ` — next: [${next.name}] ${shortTask}` : " — idle"}`
     );
 
-    if (!next) return;
+    if (!next || !nextTask) return;
 
-    // Extract code directory from task context if present
-    const cwdMatch = next.description.match(/code directory:\s*(.+)/);
+    // Extract code directory from connector context if present
+    const cwdMatch = next.content.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
-    console.log(`[task-loop] executing [${next.category}]: ${shortTask}${taskCwd ? ` (cwd: ${taskCwd})` : ""}`);
-    this.bot.notify(`Starting task [${next.category}]: *${shortTask}*`).catch(() => {});
+    console.log(`[task-loop] executing [${next.name}]: ${shortTask}${taskCwd ? ` (cwd: ${taskCwd})` : ""}`);
+    this.bot.notify(`Starting [${next.name}]: *${shortTask}*`).catch(() => {});
 
     // Step 1: Select relevant skills
-    const skillContext = await this.loadSkillContext(next.description);
+    const skillContext = await this.loadSkillContext(next.content);
 
-    // Step 2: Read task content and pass inline (agent may not have vault access)
-    const taskContent = await readFile(next.path, "utf-8");
+    // Step 2: Pass full connector content to agent — agent interprets context + tasks
     const result = await spawn(this.config, "task-executor", {
       task_path: next.path,
-      task_content: taskContent,
+      task_content: next.content,
       skill_context: skillContext,
-    }, { cwd: taskCwd, label: `${next.category}: ${shortTask}` });
+    }, { cwd: taskCwd, label: `${next.name}: ${shortTask}` });
 
     // Log agent output for visibility
     const outputPreview = result.output.slice(0, 500);
@@ -191,73 +211,69 @@ export class Orchestrator {
         const resumePreview = current.output.slice(0, 300);
         console.log(`[task-loop] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
       } catch (err) {
-        console.error(`[task-loop] Q&A failed for ${shortTask}:`, err);
-        this.bot.notify(`Task [${next.category}] *${shortTask}* timed out waiting for input.`).catch(() => {});
+        console.error(`[task-loop] Q&A failed for [${next.name}] ${shortTask}:`, err);
+        this.bot.notify(`[${next.name}] *${shortTask}* timed out waiting for input.`).catch(() => {});
         break;
       }
     }
 
     if (!current.humanInputNeeded) {
-      // Verify the task file was actually updated
+      // Re-read connector to check if agent updated it
       const updatedContent = await readFile(next.path, "utf-8");
-      const updatedStatus = extractFrontmatterField(updatedContent, "status");
-      const stillHasUnchecked = /- \[ \]/.test(updatedContent);
+      const previousPending = next.pendingTasks.length;
+      const currentPending = (updatedContent.match(/- \[ \]/g) || []).length;
 
-      if (updatedStatus === "done" || !stillHasUnchecked) {
-        console.log(`[task-loop] task completed: ${shortTask}`);
+      if (currentPending < previousPending) {
+        const completed = previousPending - currentPending;
+        console.log(`[task-loop] ${completed} task(s) completed in [${next.name}]`);
         const details = extractKeyDetails(current.output);
         const summary = [
-          `✅ *Task completed* [${next.category}]`,
-          `*${next.taskName}*`,
+          `✅ *Task completed* [${next.name}]`,
+          `*${nextTask}*`,
           details ? `\n${details}` : "",
           current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
+          currentPending > 0 ? `\n${currentPending} task(s) remaining` : "",
         ].filter(Boolean).join("\n");
         this.bot.notify(summary).catch(() => {});
       } else {
-        // Agent didn't update the file — mark it to avoid infinite loop
-        console.warn(`[task-loop] agent did not update task file. Marking as blocked.`);
-        const blockedNote = `\n\n> [!warning] ThinkOps: Agent completed without updating this file. Review agent output in thinkops/_run_log.md\n`;
+        // Agent didn't update the connector — mark to avoid infinite loop
+        console.warn(`[task-loop] agent did not update connector. Marking as blocked.`);
+        const blockedNote = `\n\n> [!warning] ThinkOps: Agent completed without updating this file. Review output in thinkops/_run_log.md\n`;
         await appendFile(next.path, blockedNote);
-        this.bot.notify(`⚠️ [${next.category}] *${shortTask}*: agent finished but didn't update the file.`).catch(() => {});
+        this.bot.notify(`⚠️ [${next.name}] *${shortTask}*: agent finished but didn't update the connector.`).catch(() => {});
       }
     }
   }
 
-  private async scanTasks(): Promise<TaskInfo[]> {
-    const dir = resolve(this.config.vaultPath, "tasks");
+  private async scanConnectors(): Promise<ConnectorInfo[]> {
+    const dir = resolve(this.config.vaultPath, "connectors");
     try {
       const files = await readdir(dir);
-      const tasks: TaskInfo[] = [];
+      const connectors: ConnectorInfo[] = [];
       for (const f of files) {
-        if (!f.endsWith(".md")) continue;
+        if (!f.endsWith(".md") || f.startsWith("_")) continue;
         const path = join(dir, f);
         const content = await readFile(path, "utf-8");
+        const name = f.replace(".md", "");
 
-        // Use frontmatter status if present, otherwise infer from checkboxes
-        let status = extractFrontmatterField(content, "status");
-        if (!status) {
-          const hasUnchecked = /- \[ \]/.test(content);
-          const hasChecked = /- \[x\]/i.test(content);
-          if (hasUnchecked) status = "todo";
-          else if (hasChecked) status = "done";
-          else status = "unknown";
-        }
+        // Minimal detection: just find unchecked items
+        const pendingMatches = content.match(/- \[ \]\s*(.+)/g) || [];
+        const pendingTasks = pendingMatches.map((m) => m.replace(/^- \[ \]\s*/, "").trim());
 
-        // Use ## Description if present, otherwise use full content as description
-        let description = extractSection(content, "Description");
-        if (!description) {
-          description = content.replace(/^---[\s\S]*?^---\s*/m, "").trim();
+        // Skip if connector has a block warning (agent failed to update)
+        if (content.includes("ThinkOps: Agent completed without updating")) {
+          console.log(`[task-loop]   ${name}: blocked (needs manual review)`);
+          continue;
         }
 
         const costStr = extractFrontmatterField(content, "estimated_cost");
         const estimatedCost = costStr ? parseFloat(costStr) : Infinity;
-        const category = f.replace(".md", "");
-        const taskName = extractFirstUnchecked(content) ?? category;
-        const shortName = taskName.length > 60 ? taskName.slice(0, 57) + "..." : taskName;
-        console.log(`[task-loop]   scanned: ${f} → status=${status}, task="${shortName}"`);
-        tasks.push({ category, taskName, path, status, description, estimatedCost });
+
+        const shortPreview = pendingTasks[0]?.slice(0, 50) ?? "(no pending)";
+        console.log(`[task-loop]   ${name}: ${pendingTasks.length} pending — "${shortPreview}"`);
+        connectors.push({ name, path, content, pendingTasks, estimatedCost });
       }
-      return tasks;
+      return connectors;
     } catch {
       return [];
     }
@@ -416,7 +432,7 @@ export class Orchestrator {
 
   private async ensureVaultStructure(): Promise<void> {
     const dirs = [
-      "tasks",
+      "connectors",
       "knowledge",
       "knowledge/sources",
       "knowledge/entities",
@@ -433,18 +449,12 @@ export class Orchestrator {
 
 // ── Helpers ────────────────────────────────────────────
 
-interface TaskInfo {
-  category: string;
-  taskName: string;
-  path: string;
-  status: string;
-  description: string;
-  estimatedCost: number;
-}
-
-function extractFirstUnchecked(content: string): string | undefined {
-  const match = content.match(/- \[ \]\s*(.+)/);
-  return match?.[1]?.trim();
+interface ConnectorInfo {
+  name: string;           // connector name (filename without .md)
+  path: string;           // full path to connector file
+  content: string;        // raw file content — agent interprets everything
+  pendingTasks: string[]; // text of unchecked `- [ ]` items
+  estimatedCost: number;  // from frontmatter, or Infinity
 }
 
 function extractKeyDetails(output: string): string {
@@ -475,13 +485,4 @@ function extractFrontmatterField(
     new RegExp(`^---[\\s\\S]*?^${field}:\\s*(.+)$[\\s\\S]*?^---`, "m")
   );
   return match?.[1]?.trim();
-}
-
-function extractSection(content: string, heading: string): string {
-  const re = new RegExp(
-    `^##\\s+${heading}\\s*$([\\s\\S]*?)(?=^##\\s|\\Z)`,
-    "m"
-  );
-  const match = content.match(re);
-  return match?.[1]?.trim() ?? "";
 }

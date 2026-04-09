@@ -6,7 +6,7 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 
 | Loop | What it does |
 |------|-------------|
-| **Task Loop** | Scans Obsidian `tasks/` for `status: todo` → selects relevant skills → executes via CLI agent → asks questions via Telegram → updates progress in Obsidian |
+| **Task Loop** | Scans Obsidian `connectors/` for pending tasks → selects relevant skills → executes via CLI agent → asks questions via Telegram → updates progress in Obsidian |
 | **Knowledge Loop** | Watches `knowledge/sources/` for new files → ingests into a persistent wiki → periodic quality linting → queryable via Telegram |
 | **Skill Loop** | Reads Claude Code conversation history → extracts reusable skills → auto-organizes hierarchy → improves via feedback |
 
@@ -14,7 +14,7 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 
 ```
 Orchestrator (thin TypeScript plumbing)
-  ├── Task Loop (poll tasks/, pick cheapest, execute)
+  ├── Task Loop (poll connectors/, pick cheapest pending, execute)
   ├── Knowledge Loop (watch sources/, ingest, lint)
   └── Skill Loop (extract from history, organize)
         │
@@ -67,7 +67,7 @@ You can also run without global install via `npm run dev`.
 
 ```
 ~/Documents/Obsidian Vault/
-  tasks/                  # Task files with YAML frontmatter
+  connectors/             # Task sources — each file has context + task checkboxes
   knowledge/
     _schema.md            # Wiki conventions (agent instructions)
     _index.md             # Content catalog
@@ -86,38 +86,41 @@ You can also run without global install via `npm run dev`.
     _run_log.md           # All agent activity (append-only)
 ```
 
-## Task File Format
+## Connector Format
 
-```yaml
----
-status: todo              # todo | in_progress | blocked | done
-priority: medium          # high | medium | low
-estimated_cost: 0.05      # USD estimate (cheapest tasks run first)
-assigned_agent: claude-code
-created: 2026-04-08
-tags: [feature]
----
-# Task Title
+A **connector** is a task source in Obsidian. Each `.md` file in `connectors/` contains context (how to work) and tasks (checkboxes). The agent interprets the connector dynamically — no rigid format required.
 
-## Description
-What needs to be done...
+```markdown
+# Context
+code directory: /path/to/project
+using git worktree from upstream/master to isolate tasks.
+create pr to org/repo
 
-## Keypoints
-- [ ] Key decision 1: _pending_
-- [x] Key decision 2: The resolved answer
+# tasks
+- [ ] Fix the memory leak in backend
+- [x] Add retry logic to RPC client
+  - **PR**: https://github.com/org/repo/pull/123
 
-## Progress Log
-- 2026-04-08: Task created
+# Progress log
+- 2026-04-08: Connector created
 ```
 
-Tasks are scheduled **cheapest-first** by `estimated_cost`. Tasks without a cost estimate run last.
+**How it works:**
+- The `# Context` section tells the agent HOW to work (code directory, workflow, PR target, etc.)
+- Each `- [ ]` is a pending task. The agent picks the first unchecked one.
+- When done, the agent marks it `[x]` with notes and adds a progress log entry.
+- Connectors are scheduled **cheapest-first** by optional `estimated_cost` frontmatter. Connectors without a cost estimate run last.
+- Add new connectors anytime in Obsidian — they'll be picked up on the next poll.
+- Add tasks to existing connectors — just append `- [ ] description`.
 
 ## Telegram Commands
 
 | Command | Description |
 |---------|-------------|
 | `/status` | Show ThinkOps status |
-| `/tasks` | List pending tasks |
+| `/connectors` | List connectors with pending task counts |
+| `/tasks` | List all pending tasks across connectors |
+| `/todo <connector> <desc>` | Add a task to a connector (creates it if new) |
 | `/query <question>` | Query the knowledge wiki |
 | `/lint` | Run knowledge wiki audit |
 | `/skills` | Show skill tree |

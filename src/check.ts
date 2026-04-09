@@ -67,7 +67,7 @@ export async function runCheck(): Promise<void> {
     failures++;
   }
 
-  const vaultDirs = ["tasks", "knowledge", "knowledge/sources", "skills", "thinkops"];
+  const vaultDirs = ["connectors", "knowledge", "knowledge/sources", "skills", "thinkops"];
   for (const d of vaultDirs) {
     const exists = await dirExists(resolve(config.vaultPath, d));
     if (exists) {
@@ -87,18 +87,18 @@ export async function runCheck(): Promise<void> {
     }
   }
 
-  // 3. Tasks
-  console.log("\nTasks:");
-  const tasksDir = resolve(config.vaultPath, "tasks");
-  if (await dirExists(tasksDir)) {
-    const files = (await readdir(tasksDir)).filter((f) => f.endsWith(".md"));
-    log("ok", `${files.length} task file(s) found`);
+  // 3. Connectors
+  console.log("\nConnectors:");
+  const connectorsDir = resolve(config.vaultPath, "connectors");
+  if (await dirExists(connectorsDir)) {
+    const files = (await readdir(connectorsDir)).filter((f) => f.endsWith(".md") && !f.startsWith("_"));
+    log("ok", `${files.length} connector(s) found`);
     for (const f of files.slice(0, 5)) {
       log("ok", `  ${f}`);
     }
     if (files.length > 5) log("ok", `  ...and ${files.length - 5} more`);
   } else {
-    log("warn", "No tasks/ directory");
+    log("warn", "No connectors/ directory");
   }
 
   // 4. Agent CLI
