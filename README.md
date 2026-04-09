@@ -16,6 +16,7 @@ Three-loop agent system that bridges **Obsidian** (task/knowledge management) wi
 ```
 Orchestrator (thin TypeScript plumbing)
   ├── Task Loop (round-robin connectors/, agent fetches + executes)
+  │     └── Eval (reviews result → skills / thinkops tasks / alerts)
   ├── Knowledge Loop (watch sources/, ingest, lint)
   └── Skill Loop (extract from history, organize)
         │
@@ -26,7 +27,12 @@ Orchestrator (thin TypeScript plumbing)
         ├── CLI Adapters (claude -p / opencode run)
         ├── Telegram Bot (Telegraf — Q&A bridge)
         ├── Run Logger (→ thinkops/_run_log.md)
+        ├── Audit Logs (→ thinkops/audit/<connector>.md)
         └── Prompt Templates (prompts/*.md — THE BRAIN)
+
+Self-improvement cycle:
+  Eval finds CODE issue → thinkops connector → agent fixes code/prompts → tests → PR
+  Eval finds SKILL pattern → skill files → loaded into future task runs
 ```
 
 All intelligence lives in prompt templates (`prompts/`). TypeScript is just config, CLI spawning, Telegram bridge, file watching, and logging.
@@ -69,6 +75,7 @@ You can also run without global install via `npm run dev`.
 ```
 ~/Documents/Obsidian Vault/
   connectors/             # Task sources (Jira, GitHub Issues, manual lists, etc.)
+    thinkops.md           #   Self-improvement: eval creates tasks here for ThinkOps itself
   knowledge/
     _schema.md            # Wiki conventions (agent instructions)
     _index.md             # Content catalog
@@ -189,19 +196,24 @@ Then add it to `src/agent/spawner.ts`.
 
 ```
 src/
-  index.ts              # Entry point
-  config.ts             # Zod-validated config
-  orchestrator.ts       # Three loops + Telegram commands
+  index.ts              # Entry point + --check flag
+  config.ts             # Zod-validated config from .env
+  check.ts              # Health check (vault, CLI, Telegram)
+  orchestrator.ts       # Task loop, eval, knowledge & skill loops, Telegram commands
   agent/
-    types.ts            # AgentCLI interface
-    claude-cli.ts       # Claude Code adapter
+    types.ts            # AgentCLI interface + CLIResult
+    claude-cli.ts       # Claude Code adapter (stream-json)
     opencode-cli.ts     # OpenCode adapter
-    spawner.ts          # Template loading + CLI dispatch
+    spawner.ts          # Template loading + CLI dispatch + run logging
   telegram/
-    bot.ts              # Telegraf bot
+    bot.ts              # Telegraf bot (Q&A bridge)
   utils/
-    run-logger.ts       # Append to _run_log.md
+    run-logger.ts       # Append to thinkops/_run_log.md
     file-watcher.ts     # chokidar wrapper
-prompts/                # Prompt templates (all agent intelligence)
-templates/              # Vault setup templates
+prompts/                # Prompt templates (THE BRAIN)
+  connector-run.md      #   Fetch task from source + execute + report
+  eval-run.md           #   Review completed task → SKILL / CODE / CRITICAL
+  knowledge-*.md        #   Ingest, query, lint
+  skill-*.md            #   Extract, organize, select
+templates/              # Vault setup examples
 ```
