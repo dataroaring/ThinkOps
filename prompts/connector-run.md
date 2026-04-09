@@ -20,6 +20,16 @@ The audit log has two entry types:
 - `DONE | **task-id** | title | result` — this task was completed. Do NOT redo it.
 - `CHECKED | no new tasks` — the connector was checked at this time and nothing new was found.
 
+## Pre-flight Analysis (from planning agent)
+
+A separate planning agent has already analyzed the current state of this connector's source. **Read this carefully and follow its guidance:**
+
+```
+{preflight_analysis}
+```
+
+If the pre-flight identifies issues (merge conflicts, unaddressed reviews, failing CI), you MUST address those before starting new work. The pre-flight's recommended strategy should guide your approach.
+
 ## Instructions
 
 ### Phase 1: Fetch the next task
@@ -44,15 +54,16 @@ The audit log has two entry types:
 Before writing any code, **think carefully** about the best strategy. Output your plan briefly (2-3 sentences) before proceeding.
 
 Consider:
-1. **Understand the full scope**: What exactly is being asked? Is this a bug fix, feature, review response, conflict resolution, or something else?
-2. **Check the current state**: Is there an existing PR or branch? Are there merge conflicts? Are there review comments to address? Is CI failing?
-3. **Identify blockers**: What could go wrong? Are there dependencies, conflicts, or prerequisites?
-4. **Choose the strategy**: What's the most efficient approach? For example:
+1. **Review the pre-flight analysis**: Follow its guidance. If it identified issues (conflicts, reviews, CI failures), handle those first.
+2. **Understand the full scope**: What exactly is being asked? Is this a bug fix, feature, review response, conflict resolution, or something else?
+3. **Research if needed**: If the task involves unfamiliar APIs, libraries, or patterns, search the web for documentation, examples, and best practices before implementing. Don't guess — look it up.
+4. **Identify blockers**: What could go wrong? Are there dependencies, conflicts, or prerequisites?
+5. **Choose the strategy**: What's the most efficient approach? For example:
    - If a PR has merge conflicts → resolve conflicts first before doing anything else.
    - If there are review comments → address each comment, don't just fix CI.
    - If CI is failing → analyze the failure and fix the root cause.
    - If the task is too large → break it down, do the most impactful part, describe what remains.
-5. **Never block on external processes**: Do NOT use `sleep` to poll for CI or wait for external processes. If you submitted changes and CI needs to run, report the task as done with a note that CI is pending. Move on.
+6. **Never block on external processes**: Do NOT use `sleep` to poll for CI or wait for external processes. If you submitted changes and CI needs to run, report the task as done with a note that CI is pending. Move on.
 
 ### Phase 3: Execute the task
 

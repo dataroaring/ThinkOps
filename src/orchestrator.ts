@@ -194,11 +194,21 @@ export class Orchestrator {
     if (!(await this.acquireSlot(name))) return;
 
     try {
+      // Phase 1: Pre-flight analysis — LLM thinks about best approach
+      console.log(`${ts()} [${name}] running pre-flight analysis...`);
+      const preflight = await spawn(this.config, "task-preflight", {
+        connector_content: content,
+        audit_log: auditLog || "(empty — no tasks completed yet)",
+      }, { cwd: taskCwd, label: `preflight: ${name}` });
+
+      const preflightOutput = preflight.output;
+      console.log(`${ts()} [${name}] pre-flight: ${preflightOutput.slice(0, 300)}`);
+
       // Select relevant skills
       console.log(`${ts()} [${name}] loading skills...`);
       const skillContext = await this.loadSkillContext(content);
 
-      // Spawn agent: fetch task from source + execute + report
+      // Phase 2: Execute with pre-flight guidance
       console.log(`${ts()} [${name}] spawning agent: fetch → execute → report`);
       this.bot.notify(`Checking connector [${name}]...`).catch(() => {});
 
@@ -207,6 +217,7 @@ export class Orchestrator {
         connector_content: content,
         audit_log: auditLog || "(empty — no tasks completed yet)",
         skill_context: skillContext,
+        preflight_analysis: preflightOutput,
       }, { cwd: taskCwd, label: name });
 
       // Log output
