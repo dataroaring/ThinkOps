@@ -50,6 +50,14 @@ The audit log has two entry types:
    - Implement the solution.
    - Run tests if available.
    - Commit, push, and create PRs as the context instructs.
+3. If the task involves a **GitHub pull request**, also handle review comments:
+   - List all unresolved review comments (from humans, Copilot, or automated reviewers).
+   - For **each** comment, provide an explicit disposition:
+     - **Addressed**: describe the change made.
+     - **Dismissed with reason**: explain why the suggestion does not apply.
+     - **Left for author**: explain why this requires the PR author's judgment.
+   - Do NOT just fix CI failures and ignore review comments — both are required.
+   - Include the disposition summary in your `TASK_COMPLETED` result.
 
 ### Phase 3: Report result
 
