@@ -40,11 +40,18 @@ A planning agent has already investigated the current state and recommended a st
 
 ### Phase 2: Think about the best approach
 
-The pre-flight analysis identified **key dimensions** for this task — the perspectives you must reason through. Read them carefully and think through each one before doing any work.
+The pre-flight analysis identified **key dimensions** and **lessons from past tasks**. Read them carefully and think through each one.
 
-Additionally, consider: are there dimensions the pre-flight missed? Based on the specific task you fetched, identify any additional dimensions that matter. Different tasks need different thinking — a bug fix, a feature, a PR review, a conflict resolution each have unique concerns.
+Additionally, consider: are there dimensions the pre-flight missed? Based on the specific task you fetched, identify any additional dimensions that matter.
 
-Output your plan briefly before proceeding. Do NOT use `sleep` or poll for external processes. If unsure about technologies or patterns, **search the web** first.
+**Decompose** the task: break it into concrete subtasks. For each subtask, think about what needs to happen and in what order. Complex tasks done as one blob lead to missed steps.
+
+**Rate your confidence**: For each key decision or subtask, how confident are you (high/medium/low)?
+- **High**: proceed.
+- **Medium**: search the web for docs, examples, or best practices before implementing.
+- **Low**: either research until you reach medium/high, or use `HUMAN_INPUT_NEEDED` to ask.
+
+Output your plan (subtasks + confidence) briefly before proceeding. Do NOT use `sleep` or poll for external processes.
 
 ### Phase 3: Execute the task
 
@@ -54,10 +61,14 @@ Output your plan briefly before proceeding. Do NOT use `sleep` or poll for exter
 
 ### Phase 4: Verify your work
 
-Before reporting completion, go back to the dimensions from Phase 2 and verify your result against each one. Also ask yourself:
+Before reporting completion, verify from **multiple perspectives**:
 
-- Did I actually solve the problem, or just attempt it?
-- Would I be confident showing this result to the person who assigned the task?
+- **As the task requester**: Does this actually solve what was asked for? Re-read the original requirements.
+- **As a code reviewer**: Would this pass review? Are there obvious issues?
+- **As a user/operator**: Will this work in practice? Any edge cases or failure modes?
+- **As a maintainer**: Is this understandable and maintainable? Any technical debt introduced?
+
+Also go back to Phase 2 — check each subtask and dimension. Did you address them all?
 
 If you find gaps, **go back and fix them** before reporting.
 

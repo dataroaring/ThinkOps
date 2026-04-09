@@ -194,11 +194,15 @@ export class Orchestrator {
     if (!(await this.acquireSlot(name))) return;
 
     try {
+      // Load past eval findings for failure memory + analogical reasoning
+      const pastFindings = await this.loadPastFindings(name);
+
       // Phase 1: Pre-flight analysis — LLM thinks about best approach
       console.log(`${ts()} [${name}] running pre-flight analysis...`);
       const preflight = await spawn(this.config, "task-preflight", {
         connector_content: content,
         audit_log: auditLog || "(empty — no tasks completed yet)",
+        past_findings: pastFindings || "(no past findings yet)",
       }, { cwd: taskCwd, label: `preflight: ${name}` });
 
       const preflightOutput = preflight.output;
@@ -251,12 +255,30 @@ export class Orchestrator {
         console.log(`${ts()} [${name}] result: no new tasks available`);
         await this.appendAuditCheck(name);
       } else {
-        const completed = parseTaskCompleted(current.output);
+        let completed = parseTaskCompleted(current.output);
         if (completed) {
           console.log(`${ts()} [${name}] task completed:`);
           console.log(`${ts()}   id:     ${completed.id}`);
           console.log(`${ts()}   title:  ${completed.title}`);
           console.log(`${ts()}   result: ${completed.result}`);
+
+          // Run critic agent to challenge the result
+          console.log(`${ts()} [${name}] running critic...`);
+          const critique = await this.runCritique(name, content, completed, current.output);
+
+          if (critique === "needs_fix" && current.sessionId) {
+            console.log(`${ts()} [${name}] critic found issues — resuming agent to fix...`);
+            current = await resume(
+              this.config,
+              current.sessionId,
+              "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.",
+            );
+            // Re-parse the fixed result
+            const fixed = parseTaskCompleted(current.output);
+            if (fixed) completed = fixed;
+            console.log(`${ts()} [${name}] fix pass complete`);
+          }
+
           if (current.cost) console.log(`${ts()}   cost:   $${current.cost.toFixed(4)}`);
           if (current.turns) console.log(`${ts()}   turns:  ${current.turns}`);
           await this.appendAuditTask(name, completed);
@@ -329,6 +351,64 @@ export class Orchestrator {
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     const entry = `- ${now} | CHECKED | no new tasks\n`;
     await appendFile(this.auditPath(connectorName), entry);
+  }
+
+  // ── Past Findings ───────────────────────────────────
+
+  private async loadPastFindings(connectorName: string): Promise<string> {
+    const findings: string[] = [];
+
+    // Load eval entries from this connector's audit log
+    const auditLog = await this.loadAuditLog(connectorName);
+    const evalLines = auditLog.split("\n").filter((l) => l.includes("| EVAL |"));
+    if (evalLines.length > 0) {
+      findings.push("## Past eval scores for this connector:");
+      findings.push(...evalLines.slice(-10)); // Last 10 evals
+    }
+
+    // Load CODE findings from the thinkops connector (accumulated improvement tasks)
+    const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
+    try {
+      const thinkopsContent = await readFile(thinkopsPath, "utf-8");
+      const tasks = thinkopsContent.split("\n").filter((l) => l.startsWith("- ["));
+      if (tasks.length > 0) {
+        findings.push("\n## Past CODE findings (improvement tasks):");
+        findings.push(...tasks.slice(-10)); // Last 10 tasks
+      }
+    } catch {
+      // No thinkops connector
+    }
+
+    return findings.join("\n");
+  }
+
+  // ── Critique ─────────────────────────────────────────
+
+  private async runCritique(
+    connectorName: string,
+    connectorContent: string,
+    task: { id: string; title: string; result: string },
+    agentOutput: string
+  ): Promise<"approved" | "needs_fix"> {
+    try {
+      const critiqueResult = await spawn(this.config, "task-critique", {
+        connector_content: connectorContent,
+        task_result: `${task.id}: ${task.title}\n${task.result}`,
+        agent_output: agentOutput.slice(0, 10_000),
+      }, { label: `critique: ${connectorName}/${task.id}` });
+
+      const output = critiqueResult.output;
+      if (output.includes("status: needs_fix")) {
+        const issues = output.match(/issues:\n([\s\S]*?)(?:\n```|$)/)?.[1]?.trim() ?? "unspecified issues";
+        console.log(`${ts()} [critic] [${connectorName}] needs fix: ${issues.slice(0, 200)}`);
+        return "needs_fix";
+      }
+      console.log(`${ts()} [critic] [${connectorName}] approved`);
+      return "approved";
+    } catch (err) {
+      console.error(`${ts()} [critic] error:`, err);
+      return "approved"; // Don't block on critic failure
+    }
   }
 
   // ── Eval ─────────────────────────────────────────────
