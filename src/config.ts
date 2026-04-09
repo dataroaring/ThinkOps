@@ -18,6 +18,8 @@ const configSchema = z.object({
   agentCli: z.enum(["claude", "opencode"]).default("claude"),
   agentModel: z.string().default("sonnet"),
 
+  agentMaxTime: z.coerce.number().positive().default(7200),   // 2 hours max wall time (safety net)
+  agentIdleTime: z.coerce.number().positive().default(300),   // 5 min idle = stuck
   taskPollInterval: z.coerce.number().positive().default(30),
   skillExtractInterval: z.coerce.number().positive().default(3600),
   skillOrganizeInterval: z.coerce.number().positive().default(86400),
@@ -39,6 +41,8 @@ export function loadConfig(): Config {
     vaultPath: process.env.VAULT_PATH,
     agentCli: process.env.AGENT_CLI,
     agentModel: process.env.AGENT_MODEL,
+    agentMaxTime: process.env.AGENT_MAX_TIME,
+    agentIdleTime: process.env.AGENT_IDLE_TIME,
     taskPollInterval: process.env.TASK_POLL_INTERVAL,
     skillExtractInterval: process.env.SKILL_EXTRACT_INTERVAL,
     skillOrganizeInterval: process.env.SKILL_ORGANIZE_INTERVAL,

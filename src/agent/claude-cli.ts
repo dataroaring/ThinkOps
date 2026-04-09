@@ -1,9 +1,12 @@
 import { spawn as spawnProcess } from "child_process";
-import type { AgentCLI, CLIResult } from "./types.js";
+import type { AgentCLI, CLIResult, TimeoutOpts } from "./types.js";
 
-const DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+const DEFAULTS: Required<TimeoutOpts> = {
+  maxTimeMs: 2 * 60 * 60 * 1000,  // 2 hours
+  idleTimeMs: 5 * 60 * 1000,       // 5 minutes
+};
 
-function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult> {
+function run(args: string[], cwd?: string, timeoutOpts?: TimeoutOpts): Promise<CLIResult> {
   return new Promise((resolve, reject) => {
     const proc = spawnProcess("claude", args, {
       cwd,
@@ -12,11 +15,26 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
 
     proc.stdin?.end();
 
-    const timeoutMs = timeout ?? DEFAULT_TIMEOUT;
-    const timer = setTimeout(() => {
+    const maxTimeMs = timeoutOpts?.maxTimeMs ?? DEFAULTS.maxTimeMs;
+    const idleTimeMs = timeoutOpts?.idleTimeMs ?? DEFAULTS.idleTimeMs;
+
+    let lastActivity = Date.now();
+
+    // Hard ceiling — safety net
+    const maxTimer = setTimeout(() => {
       proc.kill();
-      reject(new Error(`claude CLI timed out after ${timeoutMs / 1000}s`));
-    }, timeoutMs);
+      reject(new Error(`claude CLI hit max time limit (${maxTimeMs / 1000}s)`));
+    }, maxTimeMs);
+
+    // Idle checker — polls every 30s, kills if no activity for idleTimeMs
+    const idleChecker = setInterval(() => {
+      const idle = Date.now() - lastActivity;
+      if (idle > idleTimeMs) {
+        clearInterval(idleChecker);
+        proc.kill();
+        reject(new Error(`claude CLI idle for ${Math.round(idle / 1000)}s (no output) — likely stuck`));
+      }
+    }, 30_000);
 
     let lastResult = "";
     let sessionId = "";
@@ -25,6 +43,7 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
     let buffer = "";
 
     proc.stdout?.on("data", (chunk: Buffer) => {
+      lastActivity = Date.now();
       buffer += chunk.toString();
 
       const lines = buffer.split("\n");
@@ -79,7 +98,8 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
     });
 
     proc.on("close", (code) => {
-      clearTimeout(timer);
+      clearTimeout(maxTimer);
+      clearInterval(idleChecker);
 
       if (buffer.trim()) {
         try {
@@ -98,7 +118,8 @@ function run(args: string[], cwd?: string, timeout?: number): Promise<CLIResult>
     });
 
     proc.on("error", (err) => {
-      clearTimeout(timer);
+      clearTimeout(maxTimer);
+      clearInterval(idleChecker);
       reject(new Error(`claude CLI failed: ${err.message}`));
     });
   });
@@ -139,7 +160,7 @@ export const claudeCli: AgentCLI = {
       "--dangerously-skip-permissions",
     ];
     if (opts?.model) args.push("--model", opts.model);
-    return run(args, opts?.cwd, opts?.timeout);
+    return run(args, opts?.cwd, opts?.timeoutOpts);
   },
 
   async resume(sessionId, prompt, opts) {
@@ -149,6 +170,6 @@ export const claudeCli: AgentCLI = {
       "--dangerously-skip-permissions",
       "--resume", sessionId,
     ];
-    return run(args, opts?.cwd, opts?.timeout);
+    return run(args, opts?.cwd, opts?.timeoutOpts);
   },
 };

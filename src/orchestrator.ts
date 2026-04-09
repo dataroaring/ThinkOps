@@ -139,29 +139,37 @@ export class Orchestrator {
     const connectors = await this.listConnectors();
 
     if (connectors.length === 0) {
-      console.log(`[task-loop ${ts()}] poll #${this.taskPollCount}: no connectors — idle`);
+      console.log(`${ts()} [poll #${this.taskPollCount}] no connectors found — idle`);
       return;
     }
 
     // Round-robin through connectors
     const idx = (this.taskPollCount - 1) % connectors.length;
     const connector = connectors[idx];
+    const connectorNames = connectors.map((c) => c.name).join(", ");
 
-    console.log(`[task-loop ${ts()}] poll #${this.taskPollCount}: ${connectors.length} connectors — running [${connector.name}]`);
+    console.log(`${ts()} ─── poll #${this.taskPollCount} ───────────────────────────`);
+    console.log(`${ts()} connectors: [${connectorNames}]`);
+    console.log(`${ts()} selected: [${connector.name}] (${idx + 1}/${connectors.length})`);
 
     const content = await readFile(connector.path, "utf-8");
     const auditLog = await this.loadAuditLog(connector.name);
+    const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
+    console.log(`${ts()} [${connector.name}] audit: ${doneCount} tasks completed previously`);
 
     // Extract code directory from connector context
     const cwdMatch = content.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
-
-    this.bot.notify(`Checking connector [${connector.name}]...`).catch(() => {});
+    if (taskCwd) console.log(`${ts()} [${connector.name}] cwd: ${taskCwd}`);
 
     // Select relevant skills
+    console.log(`${ts()} [${connector.name}] loading skills...`);
     const skillContext = await this.loadSkillContext(content);
 
     // Spawn agent: fetch task from source + execute + report
+    console.log(`${ts()} [${connector.name}] spawning agent: fetch → execute → report`);
+    this.bot.notify(`Checking connector [${connector.name}]...`).catch(() => {});
+
     const result = await spawn(this.config, "connector-run", {
       connector_path: connector.path,
       connector_content: content,
@@ -171,24 +179,25 @@ export class Orchestrator {
 
     // Log output
     const outputPreview = result.output.slice(0, 500);
-    console.log(`[task-loop ${ts()}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
+    console.log(`${ts()} [${connector.name}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
 
     // Handle human input loop
     let current = result;
     while (current.humanInputNeeded) {
-      console.log(`[task-loop ${ts()}] human input needed: ${current.humanInputNeeded}`);
+      console.log(`${ts()} [${connector.name}] ⏳ waiting for human input: ${current.humanInputNeeded}`);
       try {
         const answer = await this.bot.askQuestion(current.humanInputNeeded);
-        console.log(`[task-loop ${ts()}] user answered: ${answer}`);
+        console.log(`${ts()} [${connector.name}] user replied: ${answer}`);
+        console.log(`${ts()} [${connector.name}] resuming agent session ${current.sessionId}...`);
         current = await resume(
           this.config,
           current.sessionId,
           `The user answered: ${answer}\n\nPlease continue executing the task.`,
         );
         const resumePreview = current.output.slice(0, 300);
-        console.log(`[task-loop ${ts()}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
+        console.log(`${ts()} [${connector.name}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
       } catch (err) {
-        console.error(`[task-loop ${ts()}] Q&A failed for [${connector.name}]:`, err);
+        console.error(`${ts()} [${connector.name}] Q&A timed out:`, err);
         this.bot.notify(`[${connector.name}] timed out waiting for input.`).catch(() => {});
         break;
       }
@@ -196,13 +205,21 @@ export class Orchestrator {
 
     // Parse result
     if (current.output.includes("NO_TASKS_AVAILABLE")) {
-      console.log(`[task-loop ${ts()}] [${connector.name}]: no tasks available`);
+      console.log(`${ts()} [${connector.name}] result: no new tasks available`);
       await this.appendAuditCheck(connector.name);
+      console.log(`${ts()} [${connector.name}] audit: CHECKED recorded`);
     } else {
       const completed = parseTaskCompleted(current.output);
       if (completed) {
-        console.log(`[task-loop ${ts()}] [${connector.name}] completed: ${completed.id} — ${completed.title}`);
+        console.log(`${ts()} [${connector.name}] ✅ task completed:`);
+        console.log(`${ts()}   id:     ${completed.id}`);
+        console.log(`${ts()}   title:  ${completed.title}`);
+        console.log(`${ts()}   result: ${completed.result}`);
+        if (current.cost) console.log(`${ts()}   cost:   $${current.cost.toFixed(4)}`);
+        if (current.turns) console.log(`${ts()}   turns:  ${current.turns}`);
         await this.appendAuditTask(connector.name, completed);
+        console.log(`${ts()} [${connector.name}] audit: DONE recorded`);
+
         const details = extractKeyDetails(current.output);
         const summary = [
           `✅ *Task completed* [${connector.name}]`,
@@ -214,12 +231,14 @@ export class Orchestrator {
         this.bot.notify(summary).catch(() => {});
 
         // Run eval agent on the completed task
+        console.log(`${ts()} [${connector.name}] running eval on completed task...`);
         await this.runEval(connector.name, content, completed, current.output);
       } else if (!current.humanInputNeeded) {
-        console.warn(`[task-loop ${ts()}] [${connector.name}]: agent finished without clear result`);
+        console.warn(`${ts()} [${connector.name}] ⚠️ agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE`);
         this.bot.notify(`⚠️ [${connector.name}]: agent finished without reporting task completion. Check thinkops/_run_log.md`).catch(() => {});
       }
     }
+    console.log(`${ts()} ─── poll #${this.taskPollCount} done ──────────────────────`);
   }
 
   // ── Connector & Audit ───────────────────────────────
@@ -276,7 +295,7 @@ export class Orchestrator {
     task: { id: string; title: string; result: string },
     agentOutput: string
   ): Promise<void> {
-    console.log(`[eval ${ts()}] evaluating [${connectorName}] ${task.id}...`);
+    console.log(`${ts()} [eval] evaluating [${connectorName}] ${task.id}: ${task.title}`);
     try {
       const evalResult = await spawn(this.config, "eval-run", {
         connector_content: connectorContent,
@@ -286,7 +305,8 @@ export class Orchestrator {
 
       const evalOutput = evalResult.output;
       const quality = evalOutput.match(/quality:\s*(\d+)/)?.[1] ?? "?";
-      console.log(`[eval ${ts()}] [${connectorName}] ${task.id}: quality ${quality}/10`);
+      console.log(`${ts()} [eval] [${connectorName}] ${task.id}: quality ${quality}/10`);
+      if (evalResult.cost) console.log(`${ts()} [eval] cost: $${evalResult.cost.toFixed(4)}`);
 
       // Annotate audit log with quality score
       const now = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -296,7 +316,7 @@ export class Orchestrator {
       // Route findings
       await this.routeEvalFindings(connectorName, task.id, evalOutput);
     } catch (err) {
-      console.error(`[eval ${ts()}] error:`, err);
+      console.error(`${ts()} [eval] error:`, err);
     }
   }
 
@@ -312,26 +332,27 @@ export class Orchestrator {
 
       if (trimmed.startsWith("SKILL:")) {
         const finding = trimmed.slice(6).trim();
-        console.log(`[eval ${ts()}] skill finding: ${finding}`);
-        // Feed into skill extraction — agent creates/updates skill files
+        console.log(`${ts()} [eval] → SKILL: ${finding}`);
         try {
           await spawn(this.config, "skill-extract", {
             history_chunk: `Eval finding from [${connectorName}] task ${taskId}:\n${finding}`,
           }, { label: `eval-skill: ${finding.slice(0, 40)}` });
+          console.log(`${ts()} [eval]   skill saved`);
         } catch {
-          // Non-critical, log and continue
+          console.warn(`${ts()} [eval]   skill save failed (non-critical)`);
         }
       } else if (trimmed.startsWith("CODE:")) {
         const finding = trimmed.slice(5).trim();
-        console.log(`[eval ${ts()}] code improvement: ${finding}`);
+        console.log(`${ts()} [eval] → CODE: ${finding}`);
         // Append to thinkops connector as a task
         const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
         const now = new Date().toISOString().slice(0, 10);
         const entry = `- [ ] ${finding} _(from eval of [${connectorName}] ${taskId}, ${now})_\n`;
         await appendFile(thinkopsPath, entry);
+        console.log(`${ts()} [eval]   task added to thinkops connector`);
       } else if (trimmed.startsWith("CRITICAL:")) {
         const finding = trimmed.slice(9).trim();
-        console.error(`[eval ${ts()}] CRITICAL: ${finding}`);
+        console.error(`${ts()} [eval] → 🚨 CRITICAL: ${finding}`);
         this.bot.notify(
           `🚨 *CRITICAL* [${connectorName}/${taskId}]\n${finding}`
         ).catch(() => {});

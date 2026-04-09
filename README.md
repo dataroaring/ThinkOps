@@ -65,6 +65,8 @@ You can also run without global install via `npm run dev`.
 | `VAULT_PATH` | Path to Obsidian vault | `~/Documents/Obsidian Vault` |
 | `AGENT_CLI` | CLI agent to use (`claude` or `opencode`) | `claude` |
 | `AGENT_MODEL` | Model name passed to the CLI | `sonnet` |
+| `AGENT_MAX_TIME` | Hard ceiling per agent run (seconds) | `7200` (2h) |
+| `AGENT_IDLE_TIME` | Kill agent if no output for this long (seconds) | `300` (5min) |
 | `TASK_POLL_INTERVAL` | Seconds between task scans | `30` |
 | `SKILL_EXTRACT_INTERVAL` | Seconds between skill extractions | `3600` |
 | `SKILL_ORGANIZE_INTERVAL` | Seconds between skill reorganizations | `86400` |

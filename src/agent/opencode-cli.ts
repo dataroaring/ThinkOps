@@ -1,18 +1,20 @@
 import { execFile } from "child_process";
 import type { AgentCLI, CLIResult } from "./types.js";
 
-const DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+// OpenCode uses execFile which doesn't support streaming, so we use maxTimeMs as a simple timeout
+const DEFAULT_MAX_TIME = 2 * 60 * 60 * 1000; // 2 hours
 
-function run(args: string[], cwd?: string, timeout?: number): Promise<string> {
+function run(args: string[], cwd?: string, maxTimeMs?: number): Promise<string> {
   return new Promise((resolve, reject) => {
+    const timeout = maxTimeMs ?? DEFAULT_MAX_TIME;
     const proc = execFile(
       "opencode",
       args,
-      { cwd, maxBuffer: 10 * 1024 * 1024, timeout: timeout ?? DEFAULT_TIMEOUT },
+      { cwd, maxBuffer: 10 * 1024 * 1024, timeout },
       (err, stdout, stderr) => {
         if (err) {
           if ((err as NodeJS.ErrnoException & { killed?: boolean }).killed) {
-            reject(new Error(`opencode CLI timed out after ${(timeout ?? DEFAULT_TIMEOUT) / 1000}s`));
+            reject(new Error(`opencode CLI timed out after ${timeout / 1000}s`));
             return;
           }
           reject(new Error(`opencode CLI failed: ${err.message}\nstderr: ${stderr}`));
@@ -48,13 +50,13 @@ export const opencodeCli: AgentCLI = {
     const args = ["run", prompt];
     if (opts?.model) args.push("--model", opts.model);
     args.push("--format", "json");
-    const raw = await run(args, opts?.cwd, opts?.timeout);
+    const raw = await run(args, opts?.cwd, opts?.timeoutOpts?.maxTimeMs);
     return parseOutput(raw);
   },
 
   async resume(sessionId, prompt, opts) {
     const args = ["run", prompt, "--session", sessionId, "--format", "json"];
-    const raw = await run(args, opts?.cwd, opts?.timeout);
+    const raw = await run(args, opts?.cwd, opts?.timeoutOpts?.maxTimeMs);
     return parseOutput(raw);
   },
 };

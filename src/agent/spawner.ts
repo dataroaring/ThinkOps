@@ -3,7 +3,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { claudeCli } from "./claude-cli.js";
 import { opencodeCli } from "./opencode-cli.js";
-import type { AgentCLI, CLIResult } from "./types.js";
+import type { AgentCLI, CLIResult, TimeoutOpts } from "./types.js";
 import type { Config } from "../config.js";
 import { appendRunLog } from "../utils/run-logger.js";
 
@@ -17,6 +17,13 @@ export interface SpawnResult extends CLIResult {
 
 function getAgent(config: Config): AgentCLI {
   return config.agentCli === "opencode" ? opencodeCli : claudeCli;
+}
+
+function configTimeout(config: Config): TimeoutOpts {
+  return {
+    maxTimeMs: config.agentMaxTime * 1000,
+    idleTimeMs: config.agentIdleTime * 1000,
+  };
 }
 
 async function loadTemplate(
@@ -54,6 +61,7 @@ export async function spawn(
   const result = await agent.execute(prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
     model: config.agentModel,
+    timeoutOpts: configTimeout(config),
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`[spawn] "${templateName}" completed in ${elapsed}s`);
@@ -85,6 +93,7 @@ export async function resume(
   const start = Date.now();
   const result = await agent.resume(sessionId, prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
+    timeoutOpts: configTimeout(config),
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 

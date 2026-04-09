@@ -39,27 +39,39 @@ The audit log has two entry types:
 5. Pick the **first genuinely new task** that needs work.
 6. If nothing new is available, output exactly: `NO_TASKS_AVAILABLE` and stop.
 
-### Phase 2: Execute the task
+### Phase 2: Plan the approach
+
+Before writing any code, **think carefully** about the best strategy. Output your plan briefly (2-3 sentences) before proceeding.
+
+Consider:
+1. **Understand the full scope**: What exactly is being asked? Is this a bug fix, feature, review response, conflict resolution, or something else?
+2. **Check the current state**: Is there an existing PR or branch? Are there merge conflicts? Are there review comments to address? Is CI failing?
+3. **Identify blockers**: What could go wrong? Are there dependencies, conflicts, or prerequisites?
+4. **Choose the strategy**: What's the most efficient approach? For example:
+   - If a PR has merge conflicts → resolve conflicts first before doing anything else.
+   - If there are review comments → address each comment, don't just fix CI.
+   - If CI is failing → analyze the failure and fix the root cause.
+   - If the task is too large → break it down, do the most impactful part, describe what remains.
+5. **Never block on external processes**: Do NOT use `sleep` to poll for CI or wait for external processes. If you submitted changes and CI needs to run, report the task as done with a note that CI is pending. Move on.
+
+### Phase 3: Execute the task
 
 1. Read the **Context** section of the connector carefully. Every line is an instruction:
    - `code directory:` — cd into it first.
    - All other context lines describe HOW to work. Follow them literally.
    - If context says to use a specific workflow (worktree, branch, docker, etc.), set it up yourself.
-2. Execute the task:
+2. Execute according to your plan:
    - Research the codebase, understand the problem.
    - Implement the solution.
    - Run tests if available.
    - Commit, push, and create PRs as the context instructs.
-3. If the task involves a **GitHub pull request**, also handle review comments:
-   - List all unresolved review comments (from humans, Copilot, or automated reviewers).
-   - For **each** comment, provide an explicit disposition:
-     - **Addressed**: describe the change made.
-     - **Dismissed with reason**: explain why the suggestion does not apply.
-     - **Left for author**: explain why this requires the PR author's judgment.
-   - Do NOT just fix CI failures and ignore review comments — both are required.
-   - Include the disposition summary in your `TASK_COMPLETED` result.
+3. Handle common situations:
+   - **Merge conflicts**: Resolve them. Fetch upstream, rebase or merge, fix conflicts.
+   - **Review comments**: Address each comment individually (fix code, reply, or explain why it doesn't apply). Don't just fix CI and ignore comments.
+   - **CI failures**: Fix the root cause. Don't retry without changes. Don't sleep/poll.
+   - **Stale branches**: Update from upstream before working.
 
-### Phase 3: Report result
+### Phase 4: Report result
 
 When done, output this block (the orchestrator parses it for the audit log):
 
