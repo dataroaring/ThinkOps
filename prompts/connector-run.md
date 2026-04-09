@@ -56,7 +56,19 @@ Output your plan briefly (2-3 sentences) before proceeding.
 2. Execute according to your plan. Use your judgment to handle whatever situation you encounter.
 3. Aim for completeness — address everything the task requires, not just the easiest part.
 
-### Phase 4: Report result
+### Phase 4: Verify your work
+
+Before reporting completion, **stop and critically evaluate your own result**:
+
+- Did you actually solve the problem, or just attempt it?
+- Re-read the task requirements — did you address everything, or miss something?
+- Check the concrete output: does the code compile? Do tests pass? Was the PR actually created?
+- Would you be confident showing this result to the person who assigned the task?
+- If you find gaps or issues, **go back and fix them** before reporting.
+
+This is a golden rule: never report a task as completed without verifying the result through your own critical thinking.
+
+### Phase 5: Report result
 
 When done, output this block (the orchestrator parses it for the audit log):
 
