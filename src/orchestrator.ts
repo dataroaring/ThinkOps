@@ -122,7 +122,7 @@ export class Orchestrator {
       try {
         await this.runTaskLoop();
       } catch (err) {
-        console.error("[task-loop] error:", err);
+        console.error(`[task-loop ${ts()}] error:`, err);
       }
       if (this.running) {
         const timer = setTimeout(poll, this.config.taskPollInterval * 1000);
@@ -139,7 +139,7 @@ export class Orchestrator {
     const connectors = await this.listConnectors();
 
     if (connectors.length === 0) {
-      console.log(`[task-loop] poll #${this.taskPollCount}: no connectors — idle`);
+      console.log(`[task-loop ${ts()}] poll #${this.taskPollCount}: no connectors — idle`);
       return;
     }
 
@@ -147,7 +147,7 @@ export class Orchestrator {
     const idx = (this.taskPollCount - 1) % connectors.length;
     const connector = connectors[idx];
 
-    console.log(`[task-loop] poll #${this.taskPollCount}: ${connectors.length} connectors — running [${connector.name}]`);
+    console.log(`[task-loop ${ts()}] poll #${this.taskPollCount}: ${connectors.length} connectors — running [${connector.name}]`);
 
     const content = await readFile(connector.path, "utf-8");
     const auditLog = await this.loadAuditLog(connector.name);
@@ -171,24 +171,24 @@ export class Orchestrator {
 
     // Log output
     const outputPreview = result.output.slice(0, 500);
-    console.log(`[task-loop] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
+    console.log(`[task-loop ${ts()}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
 
     // Handle human input loop
     let current = result;
     while (current.humanInputNeeded) {
-      console.log(`[task-loop] human input needed: ${current.humanInputNeeded}`);
+      console.log(`[task-loop ${ts()}] human input needed: ${current.humanInputNeeded}`);
       try {
         const answer = await this.bot.askQuestion(current.humanInputNeeded);
-        console.log(`[task-loop] user answered: ${answer}`);
+        console.log(`[task-loop ${ts()}] user answered: ${answer}`);
         current = await resume(
           this.config,
           current.sessionId,
           `The user answered: ${answer}\n\nPlease continue executing the task.`,
         );
         const resumePreview = current.output.slice(0, 300);
-        console.log(`[task-loop] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
+        console.log(`[task-loop ${ts()}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
       } catch (err) {
-        console.error(`[task-loop] Q&A failed for [${connector.name}]:`, err);
+        console.error(`[task-loop ${ts()}] Q&A failed for [${connector.name}]:`, err);
         this.bot.notify(`[${connector.name}] timed out waiting for input.`).catch(() => {});
         break;
       }
@@ -196,12 +196,12 @@ export class Orchestrator {
 
     // Parse result
     if (current.output.includes("NO_TASKS_AVAILABLE")) {
-      console.log(`[task-loop] [${connector.name}]: no tasks available`);
+      console.log(`[task-loop ${ts()}] [${connector.name}]: no tasks available`);
       await this.appendAuditCheck(connector.name);
     } else {
       const completed = parseTaskCompleted(current.output);
       if (completed) {
-        console.log(`[task-loop] [${connector.name}] completed: ${completed.id} — ${completed.title}`);
+        console.log(`[task-loop ${ts()}] [${connector.name}] completed: ${completed.id} — ${completed.title}`);
         await this.appendAuditTask(connector.name, completed);
         const details = extractKeyDetails(current.output);
         const summary = [
@@ -213,7 +213,7 @@ export class Orchestrator {
         ].filter(Boolean).join("\n");
         this.bot.notify(summary).catch(() => {});
       } else if (!current.humanInputNeeded) {
-        console.warn(`[task-loop] [${connector.name}]: agent finished without clear result`);
+        console.warn(`[task-loop ${ts()}] [${connector.name}]: agent finished without clear result`);
         this.bot.notify(`⚠️ [${connector.name}]: agent finished without reporting task completion. Check thinkops/_run_log.md`).catch(() => {});
       }
     }
@@ -435,6 +435,10 @@ export class Orchestrator {
 }
 
 // ── Helpers ────────────────────────────────────────────
+
+function ts(): string {
+  return new Date().toISOString().slice(11, 19);
+}
 
 function parseTaskCompleted(output: string): { id: string; title: string; result: string } | null {
   const block = output.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
