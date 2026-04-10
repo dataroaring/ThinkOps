@@ -12,6 +12,7 @@ interface ActiveAgent {
   connector: string;
   phase: string;
   taskId?: string;
+  taskTitle?: string;
   startedAt: number;
   phaseStartedAt: number;
 }
@@ -73,7 +74,7 @@ class RunLog {
 }
 
 export interface OrchestratorEvent {
-  type: "phase" | "completed" | "log" | "rate_limited";
+  type: "phase" | "completed" | "log" | "rate_limited" | "summary";
   connector: string;
   taskId?: string;
   timestamp: number;
@@ -89,6 +90,8 @@ export interface OrchestratorEvent {
   level?: "info" | "warn" | "error";
   // rate_limited events
   backoffUntil?: number;
+  // summary events — full pipeline recap
+  summary?: string;
 }
 
 export class Orchestrator {
@@ -438,12 +441,13 @@ export class Orchestrator {
     console.log(`${ts()} [${name}] released slot (${this.semaphore}/${this.config.taskConcurrency} active)`);
   }
 
-  private setPhase(name: string, phase: string, taskId?: string): void {
+  private setPhase(name: string, phase: string, taskId?: string, taskTitle?: string): void {
     const existing = this.activeAgents.get(name);
     const agent: ActiveAgent = {
       connector: name,
       phase,
       taskId: taskId ?? existing?.taskId,
+      taskTitle: taskTitle ?? existing?.taskTitle,
       startedAt: existing?.startedAt ?? Date.now(),
       phaseStartedAt: Date.now(),
     };
@@ -566,19 +570,19 @@ export class Orchestrator {
         let completed = parseTaskCompleted(current.output);
         if (completed) {
           run.taskId = completed.id;
-          this.setPhase(name, "completed", completed.id);
+          this.setPhase(name, "completed", completed.id, completed.title);
           run.log(`task done: ${completed.title}`);
           run.log(`result: ${completed.result}`);
           if (completed.dispositions) run.log(`dispositions:\n${completed.dispositions}`);
 
           // Run critic agent to challenge the result
           run.startPhase("critic");
-          this.setPhase(name, "critic", completed.id);
+          this.setPhase(name, "critic", completed.id, completed.title);
           const critique = await this.runCritique(name, content, completed, current.output);
 
           if (critique === "needs_fix" && current.sessionId) {
             run.startPhase("fix-pass");
-            this.setPhase(name, "fix-pass", completed.id);
+            this.setPhase(name, "fix-pass", completed.id, completed.title);
             run.log("critic found issues — running fix pass");
             current = await resume(
               this.config,
@@ -617,8 +621,32 @@ export class Orchestrator {
 
           // Run eval agent on the completed task
           run.startPhase("eval");
-          this.setPhase(name, "eval", completed.id);
-          await this.runEval(name, content, completed, current.output);
+          this.setPhase(name, "eval", completed.id, completed.title);
+          const quality = await this.runEval(name, content, completed, current.output);
+
+          // Emit pipeline summary — recap of everything that happened
+          const elapsed = formatDuration(Date.now() - (this.activeAgents.get(name)?.startedAt ?? Date.now()));
+          const summaryLines = [
+            `Pipeline complete: [${name}/${completed.id}]`,
+            `Task: ${completed.title}`,
+            `Result: ${completed.result}`,
+            `Critic: ${critique === "needs_fix" ? "found issues → fix pass applied" : "approved"}`,
+            `Quality: ${quality}/10`,
+            current.cost ? `Cost: $${current.cost.toFixed(4)}` : null,
+            current.turns ? `Turns: ${current.turns}` : null,
+            `Total time: ${elapsed}`,
+          ].filter(Boolean).join("\n");
+          this.emitEvent({
+            type: "summary",
+            connector: name,
+            taskId: completed.id,
+            title: completed.title,
+            result: completed.result,
+            quality,
+            cost: current.cost,
+            summary: summaryLines,
+            timestamp: Date.now(),
+          });
 
           console.log(run.summary(`completed ${completed.id}`));
         } else if (!current.humanInputNeeded) {
@@ -761,7 +789,7 @@ export class Orchestrator {
     connectorContent: string,
     task: { id: string; title: string; result: string },
     agentOutput: string
-  ): Promise<void> {
+  ): Promise<string> {
     const tag = `${connectorName}/${task.id}`;
     console.log(`${ts()} [${tag}] eval: starting`);
     try {
@@ -783,8 +811,10 @@ export class Orchestrator {
 
       // Route findings
       await this.routeEvalFindings(connectorName, task.id, evalOutput);
+      return quality;
     } catch (err) {
       console.error(`${ts()} [${tag}] eval error:`, err instanceof Error ? err.message : err);
+      return "?";
     }
   }
 

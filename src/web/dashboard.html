@@ -24,6 +24,7 @@
   .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .gauge { width: 80px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
   .gauge-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.5s; }
+  .config-info { font-size: 12px; color: var(--muted); margin-left: auto; }
 
   /* Layout */
   .content { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
@@ -35,11 +36,26 @@
     letter-spacing: 0.5px; margin-bottom: 12px; }
   .card-full { grid-column: 1 / -1; }
 
+  /* Pipeline visualization */
+  .pipeline { display: flex; align-items: center; gap: 0; flex-wrap: wrap; justify-content: center; }
+  .pipeline-step { display: flex; flex-direction: column; align-items: center; padding: 8px 14px;
+    border-radius: 8px; border: 1px solid var(--border); min-width: 100px; }
+  .pipeline-step.active { border-color: var(--accent); box-shadow: 0 0 8px rgba(88,166,255,0.2); }
+  .pipeline-icon { font-size: 18px; margin-bottom: 4px; }
+  .pipeline-name { font-size: 12px; font-weight: 600; }
+  .pipeline-desc { font-size: 10px; color: var(--muted); text-align: center; max-width: 100px; }
+  .pipeline-arrow { color: var(--muted); font-size: 16px; padding: 0 4px; flex-shrink: 0; }
+  .pipeline-step-preflight .pipeline-icon { color: var(--blue); }
+  .pipeline-step-execute .pipeline-icon { color: var(--yellow); }
+  .pipeline-step-critic .pipeline-icon { color: var(--orange); }
+  .pipeline-step-eval .pipeline-icon { color: var(--green); }
+  .pipeline-count { font-size: 16px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+
   /* Active agents table */
   .agents-table { width: 100%; border-collapse: collapse; }
   .agents-table th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase;
     padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  .agents-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .agents-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   .agents-table tr:last-child td { border-bottom: none; }
   .empty-state { color: var(--muted); font-style: italic; padding: 12px 0; text-align: center; }
 
@@ -55,6 +71,11 @@
   .phase-human-input { background: rgba(248,81,73,0.15); color: var(--red); }
   .phase-rate-limited { background: rgba(248,81,73,0.15); color: var(--red); }
   .phase-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
+  .phase-hint { font-size: 11px; color: var(--muted); display: block; margin-top: 2px; }
+
+  /* Task info */
+  .task-id { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; }
+  .task-title { font-size: 12px; color: var(--muted); display: block; margin-top: 1px; }
 
   /* Connector cards */
   .connectors-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
@@ -78,6 +99,20 @@
     border-radius: 4px; padding: 4px 8px; font-size: 12px; }
   .filter-bar label { font-size: 12px; color: var(--muted); }
 
+  /* Completions */
+  .completions-list { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
+  .completion-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .completion-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  .completion-title { font-weight: 600; font-size: 14px; }
+  .completion-tag { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace; }
+  .completion-result { font-size: 13px; color: var(--text); margin-bottom: 6px; }
+  .completion-meta { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .completion-meta span { white-space: nowrap; }
+  .quality-badge { font-weight: 600; }
+  .quality-high { color: var(--green); }
+  .quality-mid { color: var(--yellow); }
+  .quality-low { color: var(--red); }
+
   /* Connection indicator */
   .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .conn-dot.connected { background: var(--green); }
@@ -98,28 +133,71 @@
     <div class="gauge"><div class="gauge-fill" id="gaugeBar" style="width:0%"></div></div>
     <span class="stat-label">Concurrency</span>
   </div>
+  <div class="config-info" id="configInfo"></div>
 </div>
 
 <div class="content">
+  <!-- Pipeline Overview -->
+  <div class="card card-full">
+    <div class="card-title">Execution Pipeline &mdash; each task flows through these stages</div>
+    <div class="pipeline" id="pipeline">
+      <div class="pipeline-step pipeline-step-preflight" data-phase="preflight">
+        <span class="pipeline-icon">&#x1F50D;</span>
+        <span class="pipeline-name">Preflight</span>
+        <span class="pipeline-desc">Analyze state, past lessons, plan approach</span>
+        <span class="pipeline-count" id="count-preflight">0</span>
+      </div>
+      <span class="pipeline-arrow">&#x2192;</span>
+      <div class="pipeline-step pipeline-step-execute" data-phase="execute">
+        <span class="pipeline-icon">&#x2692;</span>
+        <span class="pipeline-name">Execute</span>
+        <span class="pipeline-desc">Fetch task, think, code, verify result</span>
+        <span class="pipeline-count" id="count-execute">0</span>
+      </div>
+      <span class="pipeline-arrow">&#x2192;</span>
+      <div class="pipeline-step pipeline-step-critic" data-phase="critic">
+        <span class="pipeline-icon">&#x1F9D0;</span>
+        <span class="pipeline-name">Critic</span>
+        <span class="pipeline-desc">Challenge result, find missed issues</span>
+        <span class="pipeline-count" id="count-critic">0</span>
+      </div>
+      <span class="pipeline-arrow">&#x2192;</span>
+      <div class="pipeline-step pipeline-step-eval" data-phase="eval">
+        <span class="pipeline-icon">&#x2705;</span>
+        <span class="pipeline-name">Eval</span>
+        <span class="pipeline-desc">Score quality, extract skills, route findings</span>
+        <span class="pipeline-count" id="count-eval">0</span>
+      </div>
+    </div>
+  </div>
+
   <!-- Active Agents -->
-  <div class="card">
-    <div class="card-title">Active Agents</div>
+  <div class="card card-full">
+    <div class="card-title">Active Agents &mdash; what each agent is doing right now</div>
     <table class="agents-table">
-      <thead><tr><th>Connector</th><th>Phase</th><th>Task</th><th>Elapsed</th></tr></thead>
-      <tbody id="agentsBody"><tr><td colspan="4" class="empty-state">No active agents</td></tr></tbody>
+      <thead><tr><th>Connector</th><th>Phase</th><th>Task</th><th>Time</th></tr></thead>
+      <tbody id="agentsBody"><tr><td colspan="4" class="empty-state">No active agents &mdash; waiting for next poll</td></tr></tbody>
     </table>
+  </div>
+
+  <!-- Recent Completions -->
+  <div class="card card-full">
+    <div class="card-title">Recent Completions &mdash; what ThinkOps did</div>
+    <div id="completionsList" class="completions-list">
+      <div class="empty-state">No completed tasks yet</div>
+    </div>
   </div>
 
   <!-- Connectors -->
   <div class="card">
-    <div class="card-title">Connectors</div>
+    <div class="card-title">Connectors &mdash; task sources</div>
     <div class="connectors-grid" id="connectorsGrid">
-      <div class="empty-state">No connectors</div>
+      <div class="empty-state">No connectors found</div>
     </div>
   </div>
 
   <!-- Live Log Feed -->
-  <div class="card card-full">
+  <div class="card">
     <div class="card-title">Live Log</div>
     <div class="filter-bar">
       <label>Filter:</label>
@@ -132,9 +210,25 @@
 <script>
 (function() {
   var MAX_LOG_ENTRIES = 200;
+  var MAX_COMPLETIONS = 20;
   var logs = [];
+  var completions = [];
   var currentFilter = "";
   var connectorSet = new Set();
+
+  // Phase descriptions for the agent table
+  var PHASE_HINTS = {
+    "preflight": "Reading state, past mistakes, planning approach",
+    "skill-select": "Choosing relevant skills for this task",
+    "execute": "Running the task: fetching, coding, testing",
+    "execute (resumed)": "Resumed after human input, continuing execution",
+    "critic": "Another agent is challenging the result",
+    "fix-pass": "Fixing issues found by the critic",
+    "eval": "Scoring quality and extracting lessons",
+    "completed": "Task finished, awaiting eval",
+    "human-input": "Waiting for your reply in Telegram",
+    "rate-limited": "API rate limit hit, backing off"
+  };
 
   // --- Helpers ---
   function fmtDuration(ms) {
@@ -160,6 +254,16 @@
       "human-input": "human-input", "rate-limited": "rate-limited"
     };
     return "phase-" + (map[p] || "idle");
+  }
+
+  // Map phase to pipeline bucket for counting
+  function phaseBucket(phase) {
+    var p = (phase || "").toLowerCase();
+    if (p.indexOf("preflight") >= 0 || p.indexOf("skill-select") >= 0) return "preflight";
+    if (p.indexOf("execute") >= 0) return "execute";
+    if (p.indexOf("critic") >= 0 || p.indexOf("fix-pass") >= 0) return "critic";
+    if (p.indexOf("eval") >= 0) return "eval";
+    return null;
   }
 
   function el(tag, cls, text) {
@@ -188,6 +292,7 @@
       var bar = document.getElementById("gaugeBar");
       bar.style.width = pct + "%";
       bar.style.background = pct >= 90 ? "var(--red)" : pct >= 60 ? "var(--yellow)" : "var(--green)";
+      document.getElementById("configInfo").textContent = s.agentCli + "/" + s.agentModel;
     });
   }
 
@@ -196,23 +301,64 @@
       var tbody = document.getElementById("agentsBody");
       clearChildren(tbody);
       if (!agents || agents.length === 0) {
-        var tr = el("tr"); var td = el("td", "empty-state", "No active agents");
+        var tr = el("tr"); var td = el("td", "empty-state", "No active agents \u2014 waiting for next poll");
         td.setAttribute("colspan", "4"); tr.appendChild(td); tbody.appendChild(tr);
+        updatePipelineCounts([]);
         return;
       }
       var now = Date.now();
       agents.forEach(function(a) {
         var tr = el("tr");
+
+        // Connector column
         tr.appendChild(el("td", null, a.connector));
+
+        // Phase column with description
         var phaseTd = el("td");
         var badge = el("span", "phase " + phaseClass(a.phase), a.phase);
         phaseTd.appendChild(badge);
         phaseTd.appendChild(document.createTextNode(" (" + fmtDuration(now - a.phaseStartedAt) + ")"));
+        var hint = PHASE_HINTS[a.phase] || PHASE_HINTS[(a.phase || "").toLowerCase()];
+        if (hint) {
+          phaseTd.appendChild(el("span", "phase-hint", hint));
+        }
         tr.appendChild(phaseTd);
-        tr.appendChild(el("td", null, a.taskId || "\u2014"));
+
+        // Task column with title
+        var taskTd = el("td");
+        if (a.taskId) {
+          taskTd.appendChild(el("span", "task-id", a.taskId));
+          if (a.taskTitle) {
+            taskTd.appendChild(el("span", "task-title", a.taskTitle));
+          }
+        } else {
+          taskTd.appendChild(el("span", "task-id", "\u2014"));
+          taskTd.appendChild(el("span", "task-title", "Scanning for tasks..."));
+        }
+        tr.appendChild(taskTd);
+
+        // Elapsed column
         tr.appendChild(el("td", null, fmtDuration(now - a.startedAt)));
         tbody.appendChild(tr);
       });
+      updatePipelineCounts(agents);
+    });
+  }
+
+  function updatePipelineCounts(agents) {
+    var counts = { preflight: 0, execute: 0, critic: 0, eval: 0 };
+    (agents || []).forEach(function(a) {
+      var bucket = phaseBucket(a.phase);
+      if (bucket && counts[bucket] !== undefined) counts[bucket]++;
+    });
+    var buckets = ["preflight", "execute", "critic", "eval"];
+    buckets.forEach(function(b) {
+      var countEl = document.getElementById("count-" + b);
+      if (countEl) countEl.textContent = counts[b];
+      var stepEl = countEl ? countEl.closest(".pipeline-step") : null;
+      if (stepEl) {
+        if (counts[b] > 0) { stepEl.classList.add("active"); } else { stepEl.classList.remove("active"); }
+      }
     });
   }
 
@@ -221,7 +367,7 @@
       var grid = document.getElementById("connectorsGrid");
       clearChildren(grid);
       if (!conns || conns.length === 0) {
-        grid.appendChild(el("div", "empty-state", "No connectors"));
+        grid.appendChild(el("div", "empty-state", "No connectors found"));
         return;
       }
       conns.forEach(function(c) {
@@ -254,7 +400,19 @@
   // --- Log feed (safe DOM construction) ---
   function addLogEntry(event) {
     connectorSet.add(event.connector);
-    var msg = event.message || event.phase || event.title || event.result || "event";
+    var msg = event.message || event.title || event.phase || event.result || "event";
+    // Add more context for phase events
+    if (event.type === "summary") {
+      msg = event.summary || ("Pipeline complete: " + (event.title || event.taskId));
+    } else if (event.type === "phase") {
+      var hint = PHASE_HINTS[event.phase];
+      msg = event.phase + (hint ? " \u2014 " + hint : "");
+    } else if (event.type === "completed") {
+      msg = "Completed: " + (event.title || event.taskId || "task");
+      if (event.result) msg += " \u2014 " + event.result;
+    } else if (event.type === "rate_limited") {
+      msg = "Rate limited \u2014 " + (event.message || "backing off");
+    }
     var level = event.level || (event.type === "rate_limited" ? "warn" : "info");
     logs.push({ time: event.timestamp, connector: event.connector, msg: msg, level: level, taskId: event.taskId });
     if (logs.length > MAX_LOG_ENTRIES) logs.shift();
@@ -283,6 +441,61 @@
     renderLogs();
   });
 
+  // --- Completions ---
+  function addCompletion(event) {
+    completions.unshift(event);
+    if (completions.length > MAX_COMPLETIONS) completions.pop();
+    renderCompletions();
+  }
+
+  function qualityClass(q) {
+    var n = parseInt(q, 10);
+    if (n >= 8) return "quality-high";
+    if (n >= 5) return "quality-mid";
+    return "quality-low";
+  }
+
+  function renderCompletions() {
+    var list = document.getElementById("completionsList");
+    clearChildren(list);
+    if (completions.length === 0) {
+      list.appendChild(el("div", "empty-state", "No completed tasks yet"));
+      return;
+    }
+    completions.forEach(function(c) {
+      var card = el("div", "completion-card");
+
+      var header = el("div", "completion-header");
+      header.appendChild(el("span", "completion-title", c.title || "Untitled task"));
+      header.appendChild(el("span", "completion-tag", c.connector + "/" + (c.taskId || "?")));
+      card.appendChild(header);
+
+      if (c.result) {
+        card.appendChild(el("div", "completion-result", c.result));
+      }
+
+      var meta = el("div", "completion-meta");
+      if (c.quality) {
+        var qBadge = el("span", "quality-badge " + qualityClass(c.quality), "Quality: " + c.quality + "/10");
+        meta.appendChild(qBadge);
+      }
+      if (c.cost) {
+        meta.appendChild(el("span", null, "Cost: $" + c.cost.toFixed(4)));
+      }
+      meta.appendChild(el("span", null, fmtTime(c.timestamp)));
+
+      // Parse summary for critic status
+      if (c.summary) {
+        var criticLine = c.summary.split("\n").find(function(l) { return l.indexOf("Critic:") === 0; });
+        if (criticLine) meta.appendChild(el("span", null, criticLine));
+        var timeLine = c.summary.split("\n").find(function(l) { return l.indexOf("Total time:") === 0; });
+        if (timeLine) meta.appendChild(el("span", null, timeLine));
+      }
+      card.appendChild(meta);
+      list.appendChild(card);
+    });
+  }
+
   // --- SSE ---
   function connectSSE() {
     var es = new EventSource("/api/events");
@@ -293,7 +506,12 @@
       try {
         var event = JSON.parse(e.data);
         addLogEntry(event);
-        if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
+        if (event.type === "summary") {
+          addCompletion(event);
+          refreshStatus();
+          refreshAgents();
+          refreshConnectors();
+        } else if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
           refreshStatus();
           refreshAgents();
           if (event.type === "completed") refreshConnectors();
