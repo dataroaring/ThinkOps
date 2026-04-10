@@ -742,6 +742,7 @@ export class Orchestrator {
             } else {
               // ABANDON
               run.log(`recovery: ABANDON — ${decision.analysis}`);
+              await this.appendAuditAttempted(name, `abandoned: ${decision.analysis}`, current.output);
               this.emitEvent({
                 type: "log",
                 connector: name,
@@ -787,8 +788,10 @@ export class Orchestrator {
             await this.runEval(name, content, completed, current.output);
             console.log(run.summary(`recovered + completed ${completed.id}`));
           } else if (!recovered && maxAttempts > 0) {
+            await this.appendAuditAttempted(name, "recovery exhausted", current.output);
             console.log(run.summary("recovery exhausted"));
           } else {
+            await this.appendAuditAttempted(name, "no result parsed", current.output);
             console.log(run.summary("no result parsed"));
           }
         }
@@ -869,6 +872,19 @@ export class Orchestrator {
     await mkdir(auditDir, { recursive: true });
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     const entry = `- ${now} | CHECKED | no new tasks\n`;
+    await appendFile(this.auditPath(connectorName), entry);
+  }
+
+  private async appendAuditAttempted(
+    connectorName: string,
+    reason: string,
+    outputSnippet: string
+  ): Promise<void> {
+    const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
+    await mkdir(auditDir, { recursive: true });
+    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const snippet = outputSnippet.slice(0, 500).replace(/\n/g, " ").trim();
+    const entry = `- ${now} | ATTEMPTED | ${reason} | ${snippet}\n`;
     await appendFile(this.auditPath(connectorName), entry);
   }
 

@@ -16,9 +16,10 @@ Path: `{connector_path}`
 {audit_log}
 ```
 
-The audit log has two entry types:
+The audit log has three entry types:
 - `DONE | **task-id** | title | result` — this task was completed. Do NOT redo it.
 - `CHECKED | no new tasks` — the connector was checked at this time and nothing new was found.
+- `ATTEMPTED | reason | snippet` — a previous attempt at this task failed. Read the reason carefully. Use your judgment: if the reason is a transient issue (rate limit, network), you may retry. If it's a fundamental blocker (missing permissions, wrong approach), skip this task and pick a different one. Do NOT repeat the same approach that already failed.
 
 ## Pre-flight Analysis (from planning agent)
 
@@ -33,10 +34,10 @@ A planning agent has already investigated the current state and recommended a st
 ### Phase 1: Fetch the next task
 
 1. Read the connector above to understand the task source and its filters.
-2. **Check the audit log** — note all DONE task IDs (skip them) and the last timestamp (skip unchanged items).
+2. **Check the audit log** — note all DONE task IDs (skip them), ATTEMPTED entries (read the failure reason), and the last timestamp (skip unchanged items).
 3. **Fetch available tasks** from the source, applying the connector's filters. Use the appropriate tool for the source type (API calls, CLI commands, file reading, etc.).
-4. Pick the **first genuinely new task** that needs work.
-5. If nothing new is available, output exactly: `NO_TASKS_AVAILABLE` and stop.
+4. Pick the **first genuinely new task** that needs work. For ATTEMPTED tasks, only retry if you have a **different approach** — never repeat the same strategy that already failed.
+5. If nothing new is available (all tasks are DONE or ATTEMPTED with no viable new approach), output exactly: `NO_TASKS_AVAILABLE` and stop.
 
 ### Phase 2: Think about the best approach
 
@@ -117,7 +118,7 @@ This is mandatory — never omit attribution.
 
 - You are AUTONOMOUS. Never ask interactive questions. Never wait for user input.
 - Always output either `NO_TASKS_AVAILABLE` or `TASK_COMPLETED` (or `HUMAN_INPUT_NEEDED`).
-- **AVOID LOOPS**: If the audit log shows a task was already DONE, do NOT redo it. If nothing has changed since the last CHECKED timestamp, output `NO_TASKS_AVAILABLE`.
+- **AVOID LOOPS**: If the audit log shows a task was already DONE, do NOT redo it. If a task was ATTEMPTED and failed, only retry with a fundamentally different approach — otherwise skip it. If nothing has changed since the last CHECKED timestamp, output `NO_TASKS_AVAILABLE`.
 - Follow ALL context instructions — they are not suggestions, they are requirements.
 - Execute only ONE task per run.
 - If a task is too complex, do what you can, describe what remains in the result.
