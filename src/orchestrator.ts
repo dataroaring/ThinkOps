@@ -1,10 +1,12 @@
 import { readFile, readdir, writeFile, stat, mkdir, appendFile } from "fs/promises";
 import { resolve, join } from "path";
 import { homedir } from "os";
+import { EventEmitter } from "events";
 import type { Config } from "./config.js";
 import { spawn, resume } from "./agent/spawner.js";
 import { TelegramBot } from "./telegram/bot.js";
 import { watchFolder } from "./utils/file-watcher.js";
+import { startDashboard } from "./web/server.js";
 
 interface ActiveAgent {
   connector: string;
@@ -70,6 +72,25 @@ class RunLog {
   }
 }
 
+export interface OrchestratorEvent {
+  type: "phase" | "completed" | "log" | "rate_limited";
+  connector: string;
+  taskId?: string;
+  timestamp: number;
+  // phase events
+  phase?: string;
+  // completed events
+  title?: string;
+  result?: string;
+  quality?: string;
+  cost?: number;
+  // log events
+  message?: string;
+  level?: "info" | "warn" | "error";
+  // rate_limited events
+  backoffUntil?: number;
+}
+
 export class Orchestrator {
   private bot: TelegramBot;
   private timers: NodeJS.Timeout[] = [];
@@ -79,9 +100,70 @@ export class Orchestrator {
   private totalCompleted = 0;
   private totalNoTasks = 0;
 
+  /** Event emitter for dashboard and observability. */
+  readonly events = new EventEmitter();
+  private eventBuffer: OrchestratorEvent[] = [];
+  private readonly EVENT_BUFFER_SIZE = 100;
+
+  /** Per-connector rate limit backoff state. */
+  private rateLimitBackoff = new Map<string, { until: number; delay: number }>();
+  private readonly BACKOFF_INITIAL = 5 * 60 * 1000;   // 5 minutes
+  private readonly BACKOFF_MAX = 60 * 60 * 1000;       // 1 hour
+
   constructor(private config: Config) {
     this.bot = new TelegramBot(config);
     this.registerCommands();
+  }
+
+  /** Emit a structured event and buffer it for new SSE connections. */
+  private emitEvent(event: OrchestratorEvent): void {
+    this.eventBuffer.push(event);
+    if (this.eventBuffer.length > this.EVENT_BUFFER_SIZE) {
+      this.eventBuffer.shift();
+    }
+    this.events.emit("event", event);
+  }
+
+  /** Get buffered events for new SSE connections. */
+  getRecentEvents(): OrchestratorEvent[] {
+    return [...this.eventBuffer];
+  }
+
+  /** Get a status snapshot for the dashboard API. */
+  getStatus(): {
+    uptime: number;
+    completed: number;
+    noTasks: number;
+    activeAgents: number;
+    maxAgents: number;
+    agentCli: string;
+    agentModel: string;
+    connectors: number;
+  } {
+    return {
+      uptime: this.startedAt ? Date.now() - this.startedAt : 0,
+      completed: this.totalCompleted,
+      noTasks: this.totalNoTasks,
+      activeAgents: this.activeAgents.size,
+      maxAgents: this.config.taskConcurrency,
+      agentCli: this.config.agentCli,
+      agentModel: this.config.agentModel,
+      connectors: this.connectorPolls.size,
+    };
+  }
+
+  /** Get active agents snapshot for the dashboard. */
+  getActiveAgents(): ActiveAgent[] {
+    return [...this.activeAgents.values()];
+  }
+
+  /** Get connector stats for the dashboard. */
+  getConnectorStats(): { name: string; polls: number; doneCount: number }[] {
+    const stats: { name: string; polls: number; doneCount: number }[] = [];
+    for (const [name, polls] of this.connectorPolls) {
+      stats.push({ name, polls, doneCount: this.connectorDoneCounts.get(name) ?? 0 });
+    }
+    return stats;
   }
 
   private registerCommands(): void {
@@ -185,6 +267,15 @@ export class Orchestrator {
     console.log("[orchestrator] starting skill loops...");
     this.startSkillLoops();
 
+    // Start web dashboard
+    console.log("[orchestrator] starting web dashboard...");
+    try {
+      startDashboard(this, this.config);
+      console.log(`[orchestrator] dashboard at http://localhost:${this.config.dashboardPort}`);
+    } catch (err) {
+      console.error("[orchestrator] dashboard failed to start:", err instanceof Error ? err.message : err);
+    }
+
     console.log("[orchestrator] all loops started");
     try {
       await this.bot.notify("ThinkOps started. All loops active.");
@@ -206,6 +297,7 @@ export class Orchestrator {
 
   private semaphore = 0;
   private connectorPolls = new Map<string, number>();
+  private connectorDoneCounts = new Map<string, number>();
 
   private startTaskLoop(): void {
     // Discover connectors and start a loop for each; re-scan periodically for new ones
@@ -230,6 +322,19 @@ export class Orchestrator {
   private startConnectorLoop(name: string, path: string): void {
     const poll = async () => {
       if (!this.running) return;
+
+      // Check rate limit backoff
+      const backoff = this.rateLimitBackoff.get(name);
+      if (backoff && Date.now() < backoff.until) {
+        const waitSecs = Math.round((backoff.until - Date.now()) / 1000);
+        console.log(`${ts()} [${name}] rate-limited, backing off for ${waitSecs}s`);
+        if (this.running) {
+          const timer = setTimeout(poll, Math.min(backoff.until - Date.now(), 60_000));
+          this.timers.push(timer);
+        }
+        return;
+      }
+
       try {
         await this.runConnector(name, path);
       } catch (err) {
@@ -262,31 +367,54 @@ export class Orchestrator {
     console.log(`${ts()} [${name}] released slot (${this.semaphore}/${this.config.taskConcurrency} active)`);
   }
 
+  private setPhase(name: string, phase: string, taskId?: string): void {
+    const existing = this.activeAgents.get(name);
+    const agent: ActiveAgent = {
+      connector: name,
+      phase,
+      taskId: taskId ?? existing?.taskId,
+      startedAt: existing?.startedAt ?? Date.now(),
+      phaseStartedAt: Date.now(),
+    };
+    this.activeAgents.set(name, agent);
+    this.emitEvent({
+      type: "phase",
+      connector: name,
+      phase,
+      taskId: agent.taskId,
+      timestamp: Date.now(),
+    });
+  }
+
   private async runConnector(name: string, path: string): Promise<void> {
     const pollNum = (this.connectorPolls.get(name) ?? 0) + 1;
     this.connectorPolls.set(name, pollNum);
 
-    console.log(`${ts()} ─── [${name}] poll #${pollNum} ───────────────────────`);
+    const run = new RunLog(name, pollNum);
+    run.log(`── poll #${pollNum} ──────────────────────`);
 
     const content = await readFile(path, "utf-8");
     const auditLog = await this.loadAuditLog(name);
     const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
-    console.log(`${ts()} [${name}] audit: ${doneCount} tasks completed previously`);
+    run.log(`audit: ${doneCount} tasks completed previously`);
 
     // Extract code directory from connector context
     const cwdMatch = content.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
-    if (taskCwd) console.log(`${ts()} [${name}] cwd: ${taskCwd}`);
+    if (taskCwd) run.log(`cwd: ${taskCwd}`);
 
     // Acquire concurrency slot before spawning agent
     if (!(await this.acquireSlot(name))) return;
+
+    this.setPhase(name, "preflight");
 
     try {
       // Load past eval findings for failure memory + analogical reasoning
       const pastFindings = await this.loadPastFindings(name);
 
       // Phase 1: Pre-flight analysis — LLM thinks about best approach
-      console.log(`${ts()} [${name}] running pre-flight analysis...`);
+      run.startPhase("preflight");
+      this.setPhase(name, "preflight");
       const preflight = await spawn(this.config, "task-preflight", {
         connector_content: content,
         audit_log: auditLog || "(empty — no tasks completed yet)",
@@ -294,15 +422,16 @@ export class Orchestrator {
       }, { cwd: taskCwd, label: `preflight: ${name}` });
 
       const preflightOutput = preflight.output;
-      console.log(`${ts()} [${name}] pre-flight: ${preflightOutput.slice(0, 300)}`);
+      run.log(`pre-flight done (${preflightOutput.length} chars)`);
 
       // Select relevant skills
-      console.log(`${ts()} [${name}] loading skills...`);
+      run.startPhase("skill-select");
+      this.setPhase(name, "skill-select");
       const skillContext = await this.loadSkillContext(content);
 
       // Phase 2: Execute with pre-flight guidance
-      console.log(`${ts()} [${name}] spawning agent: fetch → execute → report`);
-      this.bot.notify(`Checking connector [${name}]...`).catch(() => {});
+      run.startPhase("execute");
+      this.setPhase(name, "execute");
 
       const result = await spawn(this.config, "connector-run", {
         connector_path: path,
@@ -312,69 +441,102 @@ export class Orchestrator {
         preflight_analysis: preflightOutput,
       }, { cwd: taskCwd, label: name });
 
-      // Log output
-      const outputPreview = result.output.slice(0, 500);
-      console.log(`${ts()} [${name}] agent output:\n${outputPreview}${result.output.length > 500 ? "\n...(truncated)" : ""}`);
-
       // Handle human input loop
       let current = result;
       while (current.humanInputNeeded) {
-        console.log(`${ts()} [${name}] waiting for human input: ${current.humanInputNeeded}`);
+        run.startPhase("human-input");
+        this.setPhase(name, "human-input");
+        run.log(`waiting for human: ${current.humanInputNeeded}`);
         try {
           const answer = await this.bot.askQuestion(current.humanInputNeeded);
-          console.log(`${ts()} [${name}] user replied: ${answer}`);
-          console.log(`${ts()} [${name}] resuming agent session ${current.sessionId}...`);
+          run.log(`user replied, resuming session ${current.sessionId}`);
+          run.startPhase("execute (resumed)");
+          this.setPhase(name, "execute (resumed)");
           current = await resume(
             this.config,
             current.sessionId,
             `The user answered: ${answer}\n\nPlease continue executing the task.`,
           );
-          const resumePreview = current.output.slice(0, 300);
-          console.log(`${ts()} [${name}] resumed output:\n${resumePreview}${current.output.length > 300 ? "\n...(truncated)" : ""}`);
         } catch (err) {
-          console.error(`${ts()} [${name}] Q&A timed out:`, err);
+          run.error("Q&A timed out", err);
           this.bot.notify(`[${name}] timed out waiting for input.`).catch(() => {});
           break;
         }
       }
 
+      // Rate limit detection
+      if (isRateLimited(current.output)) {
+        run.warn("rate limit detected — applying backoff");
+        const existing = this.rateLimitBackoff.get(name);
+        const delay = existing ? Math.min(existing.delay * 2, this.BACKOFF_MAX) : this.BACKOFF_INITIAL;
+        const until = Date.now() + delay;
+        this.rateLimitBackoff.set(name, { until, delay });
+        this.emitEvent({
+          type: "rate_limited",
+          connector: name,
+          timestamp: Date.now(),
+          message: `Rate limited, backing off for ${Math.round(delay / 60000)}min`,
+          backoffUntil: until,
+        });
+        this.bot.notify(`[${name}] rate-limited, backing off for ${Math.round(delay / 60000)}min`).catch(() => {});
+        console.log(run.summary("rate-limited"));
+        return;
+      }
+      // Clear backoff on successful run
+      this.rateLimitBackoff.delete(name);
+
       // Parse result
       if (current.output.includes("NO_TASKS_AVAILABLE")) {
-        console.log(`${ts()} [${name}] result: no new tasks available`);
+        run.log("result: no new tasks");
+        this.totalNoTasks++;
         await this.appendAuditCheck(name);
+        console.log(run.summary("no tasks"));
       } else {
         let completed = parseTaskCompleted(current.output);
         if (completed) {
-          console.log(`${ts()} [${name}] task completed:`);
-          console.log(`${ts()}   id:     ${completed.id}`);
-          console.log(`${ts()}   title:  ${completed.title}`);
-          console.log(`${ts()}   result: ${completed.result}`);
-          if (completed.dispositions) console.log(`${ts()}   dispositions:\n${completed.dispositions}`);
+          run.taskId = completed.id;
+          this.setPhase(name, "completed", completed.id);
+          run.log(`task done: ${completed.title}`);
+          run.log(`result: ${completed.result}`);
+          if (completed.dispositions) run.log(`dispositions:\n${completed.dispositions}`);
 
           // Run critic agent to challenge the result
-          console.log(`${ts()} [${name}] running critic...`);
+          run.startPhase("critic");
+          this.setPhase(name, "critic", completed.id);
           const critique = await this.runCritique(name, content, completed, current.output);
 
           if (critique === "needs_fix" && current.sessionId) {
-            console.log(`${ts()} [${name}] critic found issues — resuming agent to fix...`);
+            run.startPhase("fix-pass");
+            this.setPhase(name, "fix-pass", completed.id);
+            run.log("critic found issues — running fix pass");
             current = await resume(
               this.config,
               current.sessionId,
               "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.",
             );
-            // Re-parse the fixed result
             const fixed = parseTaskCompleted(current.output);
             if (fixed) completed = fixed;
-            console.log(`${ts()} [${name}] fix pass complete`);
+            run.log("fix pass complete");
           }
 
-          if (current.cost) console.log(`${ts()}   cost:   $${current.cost.toFixed(4)}`);
-          if (current.turns) console.log(`${ts()}   turns:  ${current.turns}`);
+          if (current.cost) run.log(`cost: $${current.cost.toFixed(4)}`);
+          if (current.turns) run.log(`turns: ${current.turns}`);
           await this.appendAuditTask(name, completed);
+          this.totalCompleted++;
+          this.connectorDoneCounts.set(name, (this.connectorDoneCounts.get(name) ?? 0) + 1);
+          this.emitEvent({
+            type: "completed",
+            connector: name,
+            taskId: completed.id,
+            title: completed.title,
+            result: completed.result,
+            cost: current.cost,
+            timestamp: Date.now(),
+          });
 
           const details = extractKeyDetails(current.output);
           const summary = [
-            `*Task completed* [${name}]`,
+            `*Task completed* [${name}/${completed.id}]`,
             `*${completed.title}*`,
             completed.result ? `\n${completed.result}` : "",
             details ? `\n${details}` : "",
@@ -383,17 +545,29 @@ export class Orchestrator {
           this.bot.notify(summary).catch(() => {});
 
           // Run eval agent on the completed task
-          console.log(`${ts()} [${name}] running eval...`);
+          run.startPhase("eval");
+          this.setPhase(name, "eval", completed.id);
           await this.runEval(name, content, completed, current.output);
+
+          console.log(run.summary(`completed ${completed.id}`));
         } else if (!current.humanInputNeeded) {
-          console.warn(`${ts()} [${name}] agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE`);
-          this.bot.notify(`[${name}]: agent finished without reporting task completion.`).catch(() => {});
+          run.warn("agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE");
+          this.emitEvent({
+            type: "log",
+            connector: name,
+            message: "Agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE",
+            level: "warn",
+            timestamp: Date.now(),
+          });
+          console.log(run.summary("no result parsed"));
         }
       }
+    } catch (err) {
+      run.error("run failed", err);
     } finally {
+      this.activeAgents.delete(name);
       this.releaseSlot(name);
     }
-    console.log(`${ts()} ─── [${name}] poll #${pollNum} done ──────────────────`);
   }
 
   // ── Connector & Audit ───────────────────────────────
@@ -408,6 +582,11 @@ export class Orchestrator {
     } catch {
       return [];
     }
+  }
+
+  /** Public accessor for dashboard API. */
+  async getAuditLog(connectorName: string): Promise<string> {
+    return this.loadAuditLog(connectorName);
   }
 
   private async loadAuditLog(connectorName: string): Promise<string> {
@@ -482,23 +661,24 @@ export class Orchestrator {
     task: { id: string; title: string; result: string },
     agentOutput: string
   ): Promise<"approved" | "needs_fix"> {
+    const tag = `${connectorName}/${task.id}`;
     try {
       const critiqueResult = await spawn(this.config, "task-critique", {
         connector_content: connectorContent,
         task_result: `${task.id}: ${task.title}\n${task.result}`,
         agent_output: agentOutput.slice(0, 10_000),
-      }, { label: `critique: ${connectorName}/${task.id}` });
+      }, { label: `critique: ${tag}` });
 
       const output = critiqueResult.output;
       if (output.includes("status: needs_fix")) {
         const issues = output.match(/issues:\n([\s\S]*?)(?:\n```|$)/)?.[1]?.trim() ?? "unspecified issues";
-        console.log(`${ts()} [critic] [${connectorName}] needs fix: ${issues.slice(0, 200)}`);
+        console.log(`${ts()} [${tag}] critic: needs fix — ${issues.slice(0, 200)}`);
         return "needs_fix";
       }
-      console.log(`${ts()} [critic] [${connectorName}] approved`);
+      console.log(`${ts()} [${tag}] critic: approved`);
       return "approved";
     } catch (err) {
-      console.error(`${ts()} [critic] error:`, err);
+      console.error(`${ts()} [${tag}] critic error:`, err instanceof Error ? err.message : err);
       return "approved"; // Don't block on critic failure
     }
   }
@@ -511,18 +691,19 @@ export class Orchestrator {
     task: { id: string; title: string; result: string },
     agentOutput: string
   ): Promise<void> {
-    console.log(`${ts()} [eval] evaluating [${connectorName}] ${task.id}: ${task.title}`);
+    const tag = `${connectorName}/${task.id}`;
+    console.log(`${ts()} [${tag}] eval: starting`);
     try {
       const evalResult = await spawn(this.config, "eval-run", {
         connector_content: connectorContent,
         task_result: `${task.id}: ${task.title}\n${task.result}`,
         agent_output: agentOutput.slice(0, 10_000),
-      }, { label: `eval: ${connectorName}/${task.id}` });
+      }, { label: `eval: ${tag}` });
 
       const evalOutput = evalResult.output;
       const quality = evalOutput.match(/quality:\s*(\d+)/)?.[1] ?? "?";
-      console.log(`${ts()} [eval] [${connectorName}] ${task.id}: quality ${quality}/10`);
-      if (evalResult.cost) console.log(`${ts()} [eval] cost: $${evalResult.cost.toFixed(4)}`);
+      console.log(`${ts()} [${tag}] eval: quality ${quality}/10`);
+      if (evalResult.cost) console.log(`${ts()} [${tag}] eval cost: $${evalResult.cost.toFixed(4)}`);
 
       // Annotate audit log with quality score
       const now = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -532,7 +713,7 @@ export class Orchestrator {
       // Route findings
       await this.routeEvalFindings(connectorName, task.id, evalOutput);
     } catch (err) {
-      console.error(`${ts()} [eval] error:`, err);
+      console.error(`${ts()} [${tag}] eval error:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -541,6 +722,7 @@ export class Orchestrator {
     taskId: string,
     evalOutput: string
   ): Promise<void> {
+    const tag = `${connectorName}/${taskId}`;
     const lines = evalOutput.split("\n");
 
     for (const line of lines) {
@@ -548,29 +730,28 @@ export class Orchestrator {
 
       if (trimmed.startsWith("SKILL:")) {
         const finding = trimmed.slice(6).trim();
-        console.log(`${ts()} [eval] → SKILL: ${finding}`);
+        console.log(`${ts()} [${tag}] eval → SKILL: ${finding}`);
         try {
           await spawn(this.config, "skill-extract", {
             history_chunk: `Eval finding from [${connectorName}] task ${taskId}:\n${finding}`,
           }, { label: `eval-skill: ${finding.slice(0, 40)}` });
-          console.log(`${ts()} [eval]   skill saved`);
+          console.log(`${ts()} [${tag}] eval → skill saved`);
         } catch {
-          console.warn(`${ts()} [eval]   skill save failed (non-critical)`);
+          console.warn(`${ts()} [${tag}] eval → skill save failed (non-critical)`);
         }
       } else if (trimmed.startsWith("CODE:")) {
         const finding = trimmed.slice(5).trim();
-        console.log(`${ts()} [eval] → CODE: ${finding}`);
-        // Append to thinkops connector as a task
+        console.log(`${ts()} [${tag}] eval → CODE: ${finding}`);
         const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
         const now = new Date().toISOString().slice(0, 10);
         const entry = `- [ ] ${finding} _(from eval of [${connectorName}] ${taskId}, ${now})_\n`;
         await appendFile(thinkopsPath, entry);
-        console.log(`${ts()} [eval]   task added to thinkops connector`);
+        console.log(`${ts()} [${tag}] eval → task added to thinkops connector`);
       } else if (trimmed.startsWith("CRITICAL:")) {
         const finding = trimmed.slice(9).trim();
-        console.error(`${ts()} [eval] → 🚨 CRITICAL: ${finding}`);
+        console.error(`${ts()} [${tag}] eval → CRITICAL: ${finding}`);
         this.bot.notify(
-          `🚨 *CRITICAL* [${connectorName}/${taskId}]\n${finding}`
+          `*CRITICAL* [${tag}]\n${finding}`
         ).catch(() => {});
       }
     }
@@ -751,6 +932,17 @@ function ts(): string {
   return new Date().toISOString().slice(11, 19);
 }
 
+function formatDuration(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return `${mins}m${remSecs}s`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `${hrs}h${remMins}m`;
+}
+
 function parseTaskCompleted(output: string): { id: string; title: string; result: string; dispositions?: string } | null {
   const block = output.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
   if (!block) return null;
@@ -762,6 +954,18 @@ function parseTaskCompleted(output: string): { id: string; title: string; result
   const dispMatch = lines.match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
   const dispositions = dispMatch?.[1]?.trim() || undefined;
   return { id, title, result, dispositions };
+}
+
+const RATE_LIMIT_PATTERNS = [
+  /you['']ve hit your limit/i,
+  /rate limit/i,
+  /\b429\b/,
+  /too many requests/i,
+  /usage limit/i,
+];
+
+function isRateLimited(output: string): boolean {
+  return RATE_LIMIT_PATTERNS.some((p) => p.test(output));
 }
 
 function extractKeyDetails(output: string): string {

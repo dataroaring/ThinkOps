@@ -25,6 +25,7 @@ const configSchema = z.object({
   skillExtractInterval: z.coerce.number().positive().default(3600),
   skillOrganizeInterval: z.coerce.number().positive().default(86400),
   knowledgeLintInterval: z.coerce.number().positive().default(86400),
+  dashboardPort: z.coerce.number().positive().default(3120),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -49,6 +50,7 @@ export function loadConfig(): Config {
     skillExtractInterval: process.env.SKILL_EXTRACT_INTERVAL,
     skillOrganizeInterval: process.env.SKILL_ORGANIZE_INTERVAL,
     knowledgeLintInterval: process.env.KNOWLEDGE_LINT_INTERVAL,
+    dashboardPort: process.env.DASHBOARD_PORT,
   });
 
   if (!result.success) {

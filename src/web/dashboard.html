@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ThinkOps Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --blue: #388bfd; --yellow: #d29922; --orange: #db6d28;
+    --green: #3fb950; --red: #f85149; --gray: #484f58;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; }
+
+  /* Header */
+  .header { background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+  .header h1 { font-size: 18px; font-weight: 600; color: var(--accent); }
+  .stat { display: flex; flex-direction: column; align-items: center; }
+  .stat-value { font-size: 20px; font-weight: 700; }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .gauge { width: 80px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .gauge-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.5s; }
+
+  /* Layout */
+  .content { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { .content { grid-template-columns: 1fr; } }
+
+  /* Cards */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 12px; }
+  .card-full { grid-column: 1 / -1; }
+
+  /* Active agents table */
+  .agents-table { width: 100%; border-collapse: collapse; }
+  .agents-table th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase;
+    padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .agents-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .agents-table tr:last-child td { border-bottom: none; }
+  .empty-state { color: var(--muted); font-style: italic; padding: 12px 0; text-align: center; }
+
+  /* Phase badges */
+  .phase { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+  .phase-preflight { background: rgba(56,139,253,0.15); color: var(--blue); }
+  .phase-skill-select { background: rgba(56,139,253,0.15); color: var(--blue); }
+  .phase-execute { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .phase-critic { background: rgba(219,109,40,0.15); color: var(--orange); }
+  .phase-fix-pass { background: rgba(219,109,40,0.15); color: var(--orange); }
+  .phase-eval { background: rgba(63,185,80,0.15); color: var(--green); }
+  .phase-completed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .phase-human-input { background: rgba(248,81,73,0.15); color: var(--red); }
+  .phase-rate-limited { background: rgba(248,81,73,0.15); color: var(--red); }
+  .phase-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
+
+  /* Connector cards */
+  .connectors-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .connector-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .connector-name { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .connector-stat { font-size: 12px; color: var(--muted); }
+
+  /* Log feed */
+  .log-feed { max-height: 400px; overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; }
+  .log-entry { padding: 3px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+  .log-connector { color: var(--accent); white-space: nowrap; flex-shrink: 0; min-width: 80px; }
+  .log-msg { word-break: break-word; }
+  .log-warn { color: var(--yellow); }
+  .log-error { color: var(--red); }
+
+  /* Filter */
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+  .filter-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+  .filter-bar label { font-size: 12px; color: var(--muted); }
+
+  /* Connection indicator */
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .conn-dot.connected { background: var(--green); }
+  .conn-dot.disconnected { background: var(--red); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span class="conn-dot disconnected" id="connDot"></span>ThinkOps</h1>
+  <div class="stat"><span class="stat-value" id="uptime">--</span><span class="stat-label">Uptime</span></div>
+  <div class="stat"><span class="stat-value" id="completed">0</span><span class="stat-label">Completed</span></div>
+  <div class="stat">
+    <span class="stat-value"><span id="activeCount">0</span>/<span id="maxAgents">0</span></span>
+    <span class="stat-label">Agents</span>
+  </div>
+  <div class="stat">
+    <div class="gauge"><div class="gauge-fill" id="gaugeBar" style="width:0%"></div></div>
+    <span class="stat-label">Concurrency</span>
+  </div>
+</div>
+
+<div class="content">
+  <!-- Active Agents -->
+  <div class="card">
+    <div class="card-title">Active Agents</div>
+    <table class="agents-table">
+      <thead><tr><th>Connector</th><th>Phase</th><th>Task</th><th>Elapsed</th></tr></thead>
+      <tbody id="agentsBody"><tr><td colspan="4" class="empty-state">No active agents</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Connectors -->
+  <div class="card">
+    <div class="card-title">Connectors</div>
+    <div class="connectors-grid" id="connectorsGrid">
+      <div class="empty-state">No connectors</div>
+    </div>
+  </div>
+
+  <!-- Live Log Feed -->
+  <div class="card card-full">
+    <div class="card-title">Live Log</div>
+    <div class="filter-bar">
+      <label>Filter:</label>
+      <select id="logFilter"><option value="">All connectors</option></select>
+    </div>
+    <div class="log-feed" id="logFeed"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var MAX_LOG_ENTRIES = 200;
+  var logs = [];
+  var currentFilter = "";
+  var connectorSet = new Set();
+
+  // --- Helpers ---
+  function fmtDuration(ms) {
+    var s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60), rs = s % 60;
+    if (m < 60) return m + "m" + rs + "s";
+    var h = Math.floor(m / 60), rm = m % 60;
+    return h + "h" + rm + "m";
+  }
+
+  function fmtTime(ts) {
+    return new Date(ts).toISOString().slice(11, 19);
+  }
+
+  function phaseClass(phase) {
+    var p = (phase || "idle").toLowerCase().replace(/[^a-z-]/g, "").replace(/\s+/g, "-");
+    var map = {
+      "preflight": "preflight", "skill-select": "skill-select",
+      "execute": "execute", "executeresumed": "execute",
+      "critic": "critic", "fix-pass": "fix-pass",
+      "eval": "eval", "completed": "completed",
+      "human-input": "human-input", "rate-limited": "rate-limited"
+    };
+    return "phase-" + (map[p] || "idle");
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function clearChildren(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  // --- Data fetching ---
+  function fetchJSON(url, cb) {
+    fetch(url).then(function(r) { return r.json(); }).then(cb).catch(function() {});
+  }
+
+  function refreshStatus() {
+    fetchJSON("/api/status", function(s) {
+      document.getElementById("uptime").textContent = s.uptime > 0 ? fmtDuration(s.uptime) : "--";
+      document.getElementById("completed").textContent = s.completed;
+      document.getElementById("activeCount").textContent = s.activeAgents;
+      document.getElementById("maxAgents").textContent = s.maxAgents;
+      var pct = s.maxAgents > 0 ? (s.activeAgents / s.maxAgents * 100) : 0;
+      var bar = document.getElementById("gaugeBar");
+      bar.style.width = pct + "%";
+      bar.style.background = pct >= 90 ? "var(--red)" : pct >= 60 ? "var(--yellow)" : "var(--green)";
+    });
+  }
+
+  function refreshAgents() {
+    fetchJSON("/api/agents", function(agents) {
+      var tbody = document.getElementById("agentsBody");
+      clearChildren(tbody);
+      if (!agents || agents.length === 0) {
+        var tr = el("tr"); var td = el("td", "empty-state", "No active agents");
+        td.setAttribute("colspan", "4"); tr.appendChild(td); tbody.appendChild(tr);
+        return;
+      }
+      var now = Date.now();
+      agents.forEach(function(a) {
+        var tr = el("tr");
+        tr.appendChild(el("td", null, a.connector));
+        var phaseTd = el("td");
+        var badge = el("span", "phase " + phaseClass(a.phase), a.phase);
+        phaseTd.appendChild(badge);
+        phaseTd.appendChild(document.createTextNode(" (" + fmtDuration(now - a.phaseStartedAt) + ")"));
+        tr.appendChild(phaseTd);
+        tr.appendChild(el("td", null, a.taskId || "\u2014"));
+        tr.appendChild(el("td", null, fmtDuration(now - a.startedAt)));
+        tbody.appendChild(tr);
+      });
+    });
+  }
+
+  function refreshConnectors() {
+    fetchJSON("/api/connectors", function(conns) {
+      var grid = document.getElementById("connectorsGrid");
+      clearChildren(grid);
+      if (!conns || conns.length === 0) {
+        grid.appendChild(el("div", "empty-state", "No connectors"));
+        return;
+      }
+      conns.forEach(function(c) {
+        connectorSet.add(c.name);
+        var card = el("div", "connector-card");
+        card.appendChild(el("div", "connector-name", c.name));
+        card.appendChild(el("div", "connector-stat", "Polls: " + c.polls + " \u00B7 Done: " + c.doneCount));
+        grid.appendChild(card);
+      });
+      updateFilterOptions();
+    });
+  }
+
+  function updateFilterOptions() {
+    var sel = document.getElementById("logFilter");
+    var cur = sel.value;
+    clearChildren(sel);
+    var allOpt = el("option", null, "All connectors");
+    allOpt.value = "";
+    sel.appendChild(allOpt);
+    var sorted = Array.from(connectorSet).sort();
+    sorted.forEach(function(n) {
+      var opt = el("option", null, n);
+      opt.value = n;
+      if (n === cur) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  // --- Log feed (safe DOM construction) ---
+  function addLogEntry(event) {
+    connectorSet.add(event.connector);
+    var msg = event.message || event.phase || event.title || event.result || "event";
+    var level = event.level || (event.type === "rate_limited" ? "warn" : "info");
+    logs.push({ time: event.timestamp, connector: event.connector, msg: msg, level: level, taskId: event.taskId });
+    if (logs.length > MAX_LOG_ENTRIES) logs.shift();
+    renderLogs();
+  }
+
+  function renderLogs() {
+    var feed = document.getElementById("logFeed");
+    var filtered = currentFilter ? logs.filter(function(l) { return l.connector === currentFilter; }) : logs;
+    var wasAtBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    clearChildren(feed);
+    filtered.forEach(function(l) {
+      var entry = el("div", "log-entry");
+      entry.appendChild(el("span", "log-time", fmtTime(l.time)));
+      var tag = l.taskId ? l.connector + "/" + l.taskId : l.connector;
+      entry.appendChild(el("span", "log-connector", "[" + tag + "]"));
+      var msgCls = "log-msg" + (l.level === "error" ? " log-error" : l.level === "warn" ? " log-warn" : "");
+      entry.appendChild(el("span", msgCls, l.msg));
+      feed.appendChild(entry);
+    });
+    if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
+  }
+
+  document.getElementById("logFilter").addEventListener("change", function() {
+    currentFilter = this.value;
+    renderLogs();
+  });
+
+  // --- SSE ---
+  function connectSSE() {
+    var es = new EventSource("/api/events");
+    es.onopen = function() {
+      document.getElementById("connDot").className = "conn-dot connected";
+    };
+    es.onmessage = function(e) {
+      try {
+        var event = JSON.parse(e.data);
+        addLogEntry(event);
+        if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
+          refreshStatus();
+          refreshAgents();
+          if (event.type === "completed") refreshConnectors();
+        }
+      } catch(ex) { /* ignore parse errors */ }
+    };
+    es.onerror = function() {
+      document.getElementById("connDot").className = "conn-dot disconnected";
+    };
+  }
+
+  // --- Init ---
+  refreshStatus();
+  refreshAgents();
+  refreshConnectors();
+  connectSSE();
+  setInterval(function() { refreshStatus(); refreshAgents(); refreshConnectors(); }, 10000);
+})();
+</script>
+</body>
+</html>

@@ -55,6 +55,15 @@ async function testConfig(): Promise<void> {
       vaultPath: "/tmp/vault",
     });
     assert(result.telegramBotToken === "test-token", "Parses valid config");
+
+    // Test dashboardPort default
+    const fullSchema = z.object({
+      dashboardPort: z.coerce.number().positive().default(3120),
+    });
+    const portResult = fullSchema.parse({});
+    assert(portResult.dashboardPort === 3120, "dashboardPort defaults to 3120");
+    const customPort = fullSchema.parse({ dashboardPort: "8080" });
+    assert(customPort.dashboardPort === 8080, "dashboardPort accepts custom value");
   } catch (err) {
     assert(false, `Config test error: ${err}`);
   }
@@ -222,6 +231,23 @@ code directory: /tmp/my-project
   // Test NO_TASKS_AVAILABLE detection
   const output2 = "Checked Jira, no open issues matching filter.\nNO_TASKS_AVAILABLE";
   assert(output2.includes("NO_TASKS_AVAILABLE"), "Detects NO_TASKS_AVAILABLE");
+
+  // Test rate limit detection patterns
+  const rateLimitPatterns = [
+    /you['']ve hit your limit/i,
+    /rate limit/i,
+    /\b429\b/,
+    /too many requests/i,
+    /usage limit/i,
+  ];
+  function isRateLimited(output: string): boolean {
+    return rateLimitPatterns.some((p) => p.test(output));
+  }
+  assert(isRateLimited("Error: You've hit your limit for today"), "Detects 'hit your limit'");
+  assert(isRateLimited("HTTP 429 Too Many Requests"), "Detects 429 status");
+  assert(isRateLimited("Rate limit exceeded, try again later"), "Detects 'rate limit'");
+  assert(isRateLimited("usage limit reached"), "Detects 'usage limit'");
+  assert(!isRateLimited("Task completed successfully"), "Does not false-positive on normal output");
 
   // Test audit log write + read
   const auditDir = resolve(TEST_DIR, "thinkops/audit");
