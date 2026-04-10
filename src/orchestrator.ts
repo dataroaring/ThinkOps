@@ -807,9 +807,25 @@ export class Orchestrator {
     const dir = resolve(this.config.vaultPath, "connectors");
     try {
       const files = await readdir(dir);
-      return files
+      const candidates = files
         .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
         .map((f) => ({ name: f.replace(".md", ""), path: join(dir, f) }));
+
+      // Validate each file is a real connector (must have ## Source to function)
+      const valid: { name: string; path: string }[] = [];
+      for (const c of candidates) {
+        try {
+          const content = await readFile(c.path, "utf-8");
+          if (/^##\s+Source/m.test(content)) {
+            valid.push(c);
+          } else {
+            console.warn(`${ts()} [orchestrator] skipping ${c.name}: no '## Source' section (not a valid connector)`);
+          }
+        } catch {
+          // File disappeared between readdir and readFile — skip
+        }
+      }
+      return valid;
     } catch {
       return [];
     }
@@ -869,17 +885,17 @@ export class Orchestrator {
       findings.push(...evalLines.slice(-10)); // Last 10 evals
     }
 
-    // Load CODE findings from the thinkops connector (accumulated improvement tasks)
-    const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
+    // Load CODE findings (accumulated improvement tasks from past evals)
+    const findingsPath = resolve(this.config.vaultPath, "thinkops/findings.md");
     try {
-      const thinkopsContent = await readFile(thinkopsPath, "utf-8");
-      const tasks = thinkopsContent.split("\n").filter((l) => l.startsWith("- ["));
+      const findingsContent = await readFile(findingsPath, "utf-8");
+      const tasks = findingsContent.split("\n").filter((l) => l.startsWith("- ["));
       if (tasks.length > 0) {
         findings.push("\n## Past CODE findings (improvement tasks):");
         findings.push(...tasks.slice(-10)); // Last 10 tasks
       }
     } catch {
-      // No thinkops connector
+      // No findings yet
     }
 
     return findings.join("\n");
@@ -1013,11 +1029,11 @@ export class Orchestrator {
       } else if (trimmed.startsWith("CODE:")) {
         const finding = trimmed.slice(5).trim();
         console.log(`${ts()} [${tag}] eval → CODE: ${finding}`);
-        const thinkopsPath = resolve(this.config.vaultPath, "connectors/thinkops.md");
+        const findingsPath = resolve(this.config.vaultPath, "thinkops/findings.md");
         const now = new Date().toISOString().slice(0, 10);
         const entry = `- [ ] ${finding} _(from eval of [${connectorName}] ${taskId}, ${now})_\n`;
-        await appendFile(thinkopsPath, entry);
-        console.log(`${ts()} [${tag}] eval → task added to thinkops connector`);
+        await appendFile(findingsPath, entry);
+        console.log(`${ts()} [${tag}] eval → finding saved to thinkops/findings.md`);
       } else if (trimmed.startsWith("CRITICAL:")) {
         const finding = trimmed.slice(9).trim();
         console.error(`${ts()} [${tag}] eval → CRITICAL: ${finding}`);
