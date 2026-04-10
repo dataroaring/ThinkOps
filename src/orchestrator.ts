@@ -885,10 +885,6 @@ export class Orchestrator {
       findings.push(...evalLines.slice(-10)); // Last 10 evals
     }
 
-    // CODE findings are stored in thinkops/findings.md and available as a
-    // connector source (connectors/thinkops.md). They flow through the normal
-    // connector pipeline — no special injection needed here.
-
     return findings.join("\n");
   }
 
@@ -1020,11 +1016,12 @@ export class Orchestrator {
       } else if (trimmed.startsWith("CODE:")) {
         const finding = trimmed.slice(5).trim();
         console.log(`${ts()} [${tag}] eval → CODE: ${finding}`);
-        const findingsPath = resolve(this.config.vaultPath, "thinkops/findings.md");
+        const findingsConnector = resolve(this.config.vaultPath, "connectors/findings.md");
+        await this.ensureFindingsConnector(findingsConnector);
         const now = new Date().toISOString().slice(0, 10);
         const entry = `- [ ] ${finding} _(from eval of [${connectorName}] ${taskId}, ${now})_\n`;
-        await appendFile(findingsPath, entry);
-        console.log(`${ts()} [${tag}] eval → finding saved to thinkops/findings.md`);
+        await appendFile(findingsConnector, entry);
+        console.log(`${ts()} [${tag}] eval → finding added to connectors/findings.md`);
       } else if (trimmed.startsWith("CRITICAL:")) {
         const finding = trimmed.slice(9).trim();
         console.error(`${ts()} [${tag}] eval → CRITICAL: ${finding}`);
@@ -1181,6 +1178,23 @@ export class Orchestrator {
       return tail;
     } catch {
       return null;
+    }
+  }
+
+  /** Ensure connectors/findings.md exists with proper ## Source header. */
+  private async ensureFindingsConnector(filePath: string): Promise<void> {
+    try {
+      await stat(filePath);
+    } catch {
+      const header = [
+        "## Source",
+        "Improvement findings discovered by the eval pipeline.",
+        "Each unchecked item is a task to address.",
+        "",
+        "## Tasks",
+        "",
+      ].join("\n");
+      await writeFile(filePath, header);
     }
   }
 
