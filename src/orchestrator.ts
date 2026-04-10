@@ -885,18 +885,9 @@ export class Orchestrator {
       findings.push(...evalLines.slice(-10)); // Last 10 evals
     }
 
-    // Load CODE findings (accumulated improvement tasks from past evals)
-    const findingsPath = resolve(this.config.vaultPath, "thinkops/findings.md");
-    try {
-      const findingsContent = await readFile(findingsPath, "utf-8");
-      const tasks = findingsContent.split("\n").filter((l) => l.startsWith("- ["));
-      if (tasks.length > 0) {
-        findings.push("\n## Past CODE findings (improvement tasks):");
-        findings.push(...tasks.slice(-10)); // Last 10 tasks
-      }
-    } catch {
-      // No findings yet
-    }
+    // CODE findings are stored in thinkops/findings.md and available as a
+    // connector source (connectors/thinkops.md). They flow through the normal
+    // connector pipeline — no special injection needed here.
 
     return findings.join("\n");
   }

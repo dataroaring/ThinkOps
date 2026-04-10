@@ -34,3 +34,16 @@ Manual task list below.
 
 ## Context
 code directory: /path/to/your/project
+
+
+# Example: Self-Improvement Connector
+
+## Source
+ThinkOps findings file: thinkops/findings.md
+These are improvement tasks discovered during eval of other connectors.
+Each finding is a checkbox item `- [ ] description`.
+
+## Context
+code directory: /path/to/thinkops-managed-project
+Address unchecked findings. Mark items `[x]` when resolved.
+Only work on findings relevant to this codebase.
