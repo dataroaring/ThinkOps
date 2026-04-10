@@ -94,6 +94,9 @@ export interface OrchestratorEvent {
   backoffUntil?: number;
   // summary events — full pipeline recap
   summary?: string;
+  // size info
+  inputChars?: number;
+  outputChars?: number;
 }
 
 export class Orchestrator {
@@ -501,8 +504,8 @@ export class Orchestrator {
       }, { cwd: taskCwd, label: `preflight: ${name}` });
 
       const preflightOutput = preflight.output;
-      run.log(`pre-flight done (${preflightOutput.length} chars)`);
-      this.emitEvent({ type: "log", connector: name, message: "Pre-flight complete, selecting skills", level: "info", timestamp: Date.now() });
+      run.log(`pre-flight done (in: ${preflight.inputChars}c, out: ${preflightOutput.length}c)`);
+      this.emitEvent({ type: "log", connector: name, message: `Pre-flight complete (in: ${fmtChars(preflight.inputChars)}, out: ${fmtChars(preflight.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: preflight.inputChars, outputChars: preflight.outputChars });
 
       // Select relevant skills
       run.startPhase("skill-select");
@@ -521,6 +524,7 @@ export class Orchestrator {
         skill_context: skillContext,
         preflight_analysis: preflightOutput,
       }, { cwd: taskCwd, label: name });
+      this.emitEvent({ type: "log", connector: name, message: `Execute done (in: ${fmtChars(result.inputChars)}, out: ${fmtChars(result.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: result.inputChars, outputChars: result.outputChars });
 
       // Handle human input loop
       let current = result;
@@ -643,6 +647,7 @@ export class Orchestrator {
             `Quality: ${quality}/10`,
             current.cost ? `Cost: $${current.cost.toFixed(4)}` : null,
             current.turns ? `Turns: ${current.turns}` : null,
+            `Input: ${fmtChars(preflight.inputChars)} (preflight) + ${fmtChars(result.inputChars)} (execute)`,
             `Total time: ${elapsed}`,
           ].filter(Boolean).join("\n");
           this.emitEvent({
@@ -1196,6 +1201,11 @@ export class Orchestrator {
 
 function ts(): string {
   return new Date().toISOString().slice(11, 19);
+}
+
+function fmtChars(n: number): string {
+  if (n < 1000) return `${n}c`;
+  return `${(n / 1000).toFixed(1)}K`;
 }
 
 function formatDuration(ms: number): string {

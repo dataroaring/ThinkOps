@@ -13,6 +13,8 @@ const PROMPTS_DIR = resolve(__dirname, "../../prompts");
 export interface SpawnResult extends CLIResult {
   template: string;
   humanInputNeeded?: string;
+  inputChars: number;
+  outputChars: number;
 }
 
 function getAgent(config: Config): AgentCLI {
@@ -29,9 +31,11 @@ function configTimeout(config: Config): TimeoutOpts {
 async function loadTemplate(
   name: string,
   vars: Record<string, string>
-): Promise<string> {
+): Promise<{ prompt: string; templateChars: number }> {
   const raw = await readFile(resolve(PROMPTS_DIR, `${name}.md`), "utf-8");
-  return raw.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`);
+  const templateChars = raw.length;
+  const prompt = raw.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`);
+  return { prompt, templateChars };
 }
 
 function extractHumanInput(output: string): string | undefined {
@@ -45,7 +49,7 @@ export async function spawn(
   vars: Record<string, string>,
   opts?: { cwd?: string; extraContext?: string; label?: string }
 ): Promise<SpawnResult> {
-  let prompt = await loadTemplate(templateName, {
+  const loaded = await loadTemplate(templateName, {
     vault_path: config.vaultPath,
     brand_name: config.brandName,
     brand_signature: config.brandSignature,
@@ -53,13 +57,17 @@ export async function spawn(
     ...vars,
   });
 
+  let prompt = loaded.prompt;
   if (opts?.extraContext) {
     prompt = opts.extraContext + "\n\n" + prompt;
   }
 
+  const inputChars = prompt.length;
+  const varsChars = inputChars - loaded.templateChars;
+
   const agent = getAgent(config);
   const label = opts?.label ? ` (${opts.label})` : "";
-  console.log(`[spawn] ${agent.name} running "${templateName}"${label}...`);
+  console.log(`[spawn] ${agent.name} running "${templateName}"${label} | input: ${fmtSize(inputChars)} (template: ${fmtSize(loaded.templateChars)}, context: ${fmtSize(varsChars)})`);
   const start = Date.now();
   const result = await agent.execute(prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
@@ -67,7 +75,8 @@ export async function spawn(
     timeoutOpts: configTimeout(config),
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  console.log(`[spawn] "${templateName}" completed in ${elapsed}s`);
+  const outputChars = result.output.length;
+  console.log(`[spawn] "${templateName}" done in ${elapsed}s | output: ${fmtSize(outputChars)}${result.cost ? ` | cost: $${result.cost.toFixed(4)}` : ""}`);
 
   const humanInputNeeded = extractHumanInput(result.output);
 
@@ -81,9 +90,11 @@ export async function spawn(
     sessionId: result.sessionId,
     humanInputNeeded: !!humanInputNeeded,
     output: result.output,
+    inputChars,
+    outputChars,
   });
 
-  return { ...result, template: templateName, humanInputNeeded };
+  return { ...result, template: templateName, humanInputNeeded, inputChars, outputChars };
 }
 
 export async function resume(
@@ -93,12 +104,16 @@ export async function resume(
   opts?: { cwd?: string }
 ): Promise<SpawnResult> {
   const agent = getAgent(config);
+  const inputChars = prompt.length;
+  console.log(`[spawn] ${agent.name} resume ${sessionId.slice(0, 8)}... | input: ${fmtSize(inputChars)}`);
   const start = Date.now();
   const result = await agent.resume(sessionId, prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
     timeoutOpts: configTimeout(config),
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  const outputChars = result.output.length;
+  console.log(`[spawn] resume done in ${elapsed}s | output: ${fmtSize(outputChars)}${result.cost ? ` | cost: $${result.cost.toFixed(4)}` : ""}`);
 
   const humanInputNeeded = extractHumanInput(result.output);
 
@@ -111,7 +126,15 @@ export async function resume(
     turns: result.turns,
     sessionId: result.sessionId,
     humanInputNeeded: !!humanInputNeeded,
+    inputChars,
+    outputChars,
   });
 
-  return { ...result, template: "resume", humanInputNeeded };
+  return { ...result, template: "resume", humanInputNeeded, inputChars, outputChars };
+}
+
+function fmtSize(chars: number): string {
+  if (chars < 1000) return `${chars}c`;
+  const kb = (chars / 1000).toFixed(1);
+  return `${kb}K`;
 }
