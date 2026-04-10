@@ -112,11 +112,32 @@ You can also run without global install via `npm run dev`.
 | `AGENT_MODEL` | Model name passed to the CLI | `sonnet` |
 | `AGENT_MAX_TIME` | Hard ceiling per agent run (seconds) | `7200` (2h) |
 | `AGENT_IDLE_TIME` | Kill agent if no output for this long (seconds) | `300` (5min) |
-| `TASK_CONCURRENCY` | Max parallel connector agent runs | `3` |
+| `TASK_CONCURRENCY` | Max parallel connector agent runs | `2` |
 | `TASK_POLL_INTERVAL` | Seconds between connector polls | `30` |
 | `SKILL_EXTRACT_INTERVAL` | Seconds between skill extractions | `3600` |
 | `SKILL_ORGANIZE_INTERVAL` | Seconds between skill reorganizations | `86400` |
 | `KNOWLEDGE_LINT_INTERVAL` | Seconds between knowledge lint runs | `86400` |
+| `DASHBOARD_PORT` | Web dashboard port | `3120` |
+
+## Web Dashboard
+
+ThinkOps includes a real-time web dashboard at `http://localhost:3120` (configurable via `DASHBOARD_PORT`).
+
+- **Header**: uptime, completed tasks, active/max agents, concurrency gauge
+- **Active agents table**: connector, phase (color-coded), task ID, elapsed time
+- **Connector cards**: name, poll count, completed count
+- **Live log feed**: real-time SSE stream, filterable by connector
+
+API endpoints:
+- `GET /api/status` — JSON status snapshot
+- `GET /api/agents` — active agents list
+- `GET /api/connectors` — connector stats
+- `GET /api/audit/:name` — parsed audit log entries
+- `GET /api/events` — SSE stream for real-time updates
+
+## Rate Limit Detection
+
+When the agent CLI returns a rate limit error (429, "hit your limit", etc.), ThinkOps applies exponential backoff for that connector (5min initial, doubling up to 1hr max). Backoff resets on the next successful run. Rate-limited connectors are visible in the dashboard.
 
 ## Obsidian Vault Structure
 
@@ -272,6 +293,9 @@ src/
     spawner.ts          # Template loading + CLI dispatch + run logging
   telegram/
     bot.ts              # Telegraf bot (Q&A bridge)
+  web/
+    server.ts           # HTTP server + SSE + JSON API (zero deps)
+    dashboard.html      # Single-file real-time dashboard
   utils/
     run-logger.ts       # Append to thinkops/_run_log.md
     file-watcher.ts     # chokidar wrapper

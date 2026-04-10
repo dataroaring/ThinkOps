@@ -55,6 +55,15 @@ async function testConfig(): Promise<void> {
       vaultPath: "/tmp/vault",
     });
     assert(result.telegramBotToken === "test-token", "Parses valid config");
+
+    // Test dashboardPort default
+    const fullSchema = z.object({
+      dashboardPort: z.coerce.number().positive().default(3120),
+    });
+    const portResult = fullSchema.parse({});
+    assert(portResult.dashboardPort === 3120, "dashboardPort defaults to 3120");
+    const customPort = fullSchema.parse({ dashboardPort: "8080" });
+    assert(customPort.dashboardPort === 8080, "dashboardPort accepts custom value");
   } catch (err) {
     assert(false, `Config test error: ${err}`);
   }
@@ -203,9 +212,67 @@ code directory: /tmp/my-project
   assert(title === "Fix BE memory leak", `Parsed task title: ${title}`);
   assert(result?.includes("PR"), `Parsed task result: ${result}`);
 
+  // Test TASK_COMPLETED parsing with optional dispositions field
+  const output1d = `Some agent output...\nTASK_COMPLETED\nid: PROJ-42\ntitle: Fix PR review\nresult: Updated PR #5\ndispositions: \n  - Use std::string_view — Addressed in commit abc123\n  - Add null check — Dismissed: guaranteed non-null\n  - Rename tmp — Left for author\n`;
+  const blockD = output1d.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
+  assert(!!blockD, "Parses TASK_COMPLETED block with dispositions");
+  const dispMatch = blockD![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
+  assert(!!dispMatch, "Extracts dispositions field");
+  // Normalize: trimStart each line, filter empty, join — matches parseTaskCompleted()
+  const dispositions = dispMatch![1].split("\n").map((l: string) => l.trimStart()).filter(Boolean).join("\n");
+  assert(dispositions.includes("Addressed"), `Dispositions contain Addressed: ${dispositions}`);
+  assert(dispositions.includes("Dismissed"), `Dispositions contain Dismissed: ${dispositions}`);
+  assert(dispositions.includes("Left for author"), `Dispositions contain Left for author: ${dispositions}`);
+  // Verify normalization strips leading whitespace from each line
+  for (const line of dispositions.split("\n")) {
+    assert(line === line.trimStart(), `Disposition line should be left-trimmed: "${line}"`);
+  }
+
+  // Test TASK_COMPLETED parsing without dispositions (backwards compat)
+  const blockNd = output1.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
+  const noDisp = blockNd![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
+  assert(!noDisp, "No dispositions field when absent from output");
+
+  // Test audit entry formatting with dispositions
+  {
+    const task = {
+      id: "TEST-1", title: "Test task", result: "Did things",
+      dispositions: "- Comment A — Addressed\n  - Comment B — Dismissed: reason",
+    };
+    const now = "2026-01-01 00:00:00";
+    let entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
+    if (task.dispositions) {
+      const normalized = task.dispositions.split("\n").map((l: string) => `    ${l.trimStart()}`).join("\n");
+      entry += `  dispositions:\n${normalized}\n`;
+    }
+    // Each disposition line should have exactly 4 spaces of indentation
+    const dispLines = entry.split("\n").filter((l: string) => l.trimStart().startsWith("- Comment"));
+    for (const line of dispLines) {
+      assert(line.startsWith("    - Comment"), `Audit disposition line has consistent 4-space indent: "${line}"`);
+    }
+    assert(entry.includes("  dispositions:"), "Audit entry includes dispositions header");
+  }
+
   // Test NO_TASKS_AVAILABLE detection
   const output2 = "Checked Jira, no open issues matching filter.\nNO_TASKS_AVAILABLE";
   assert(output2.includes("NO_TASKS_AVAILABLE"), "Detects NO_TASKS_AVAILABLE");
+
+  // Test rate limit detection patterns
+  const rateLimitPatterns = [
+    /you['']ve hit your limit/i,
+    /rate limit/i,
+    /\b429\b/,
+    /too many requests/i,
+    /usage limit/i,
+  ];
+  function isRateLimited(output: string): boolean {
+    return rateLimitPatterns.some((p) => p.test(output));
+  }
+  assert(isRateLimited("Error: You've hit your limit for today"), "Detects 'hit your limit'");
+  assert(isRateLimited("HTTP 429 Too Many Requests"), "Detects 429 status");
+  assert(isRateLimited("Rate limit exceeded, try again later"), "Detects 'rate limit'");
+  assert(isRateLimited("usage limit reached"), "Detects 'usage limit'");
+  assert(!isRateLimited("Task completed successfully"), "Does not false-positive on normal output");
 
   // Test audit log write + read
   const auditDir = resolve(TEST_DIR, "thinkops/audit");

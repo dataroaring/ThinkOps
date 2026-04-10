@@ -47,6 +47,9 @@ export async function spawn(
 ): Promise<SpawnResult> {
   let prompt = await loadTemplate(templateName, {
     vault_path: config.vaultPath,
+    brand_name: config.brandName,
+    brand_signature: config.brandSignature,
+    brand_pr_footer: config.brandPrFooter,
     ...vars,
   });
 
