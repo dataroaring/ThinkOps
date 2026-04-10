@@ -2,6 +2,8 @@ import { readFile, readdir, writeFile, stat, mkdir, appendFile } from "fs/promis
 import { resolve, join } from "path";
 import { homedir } from "os";
 import { EventEmitter } from "events";
+import { createHash } from "crypto";
+import { exec as execCb } from "child_process";
 import type { Config } from "./config.js";
 import { spawn, resume } from "./agent/spawner.js";
 import { TelegramBot } from "./telegram/bot.js";
@@ -117,6 +119,9 @@ export class Orchestrator {
   private rateLimitBackoff = new Map<string, { until: number; delay: number }>();
   private readonly BACKOFF_INITIAL = 5 * 60 * 1000;   // 5 minutes
   private readonly BACKOFF_MAX = 60 * 60 * 1000;       // 1 hour
+
+  /** Fingerprint of last ## Check output per connector — skip poll when unchanged. */
+  private checkFingerprints = new Map<string, string>();
 
   constructor(private config: Config) {
     this.bot = new TelegramBot(config);
@@ -475,6 +480,14 @@ export class Orchestrator {
     run.log(`── poll #${pollNum} ──────────────────────`);
 
     const content = await readFile(path, "utf-8");
+
+    // Cheap change detection: run ## Check command before any LLM call
+    const changed = await this.runCheapCheck(name, content);
+    if (!changed) {
+      run.log("check: no changes detected — skipping poll");
+      return;
+    }
+
     const auditLog = await this.loadAuditLog(name);
     const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
     run.log(`audit: ${doneCount} tasks completed previously`);
@@ -802,6 +815,46 @@ export class Orchestrator {
       this.activeAgents.delete(name);
       this.releaseSlot(name);
     }
+  }
+
+  // ── Cheap Change Detection ──────────────────────────
+
+  /**
+   * Run the optional ## Check command from the connector.
+   * Returns true if changes detected (or no check defined), false if unchanged.
+   */
+  private async runCheapCheck(name: string, content: string): Promise<boolean> {
+    const checkMatch = content.match(/^##\s+Check\s*\n([\s\S]*?)(?=\n##|$)/m);
+    if (!checkMatch) return true; // No ## Check section — always run
+
+    const command = checkMatch[1].trim();
+    if (!command) return true;
+
+    try {
+      const output = await this.execCheck(command);
+      const fingerprint = createHash("sha256").update(output).digest("hex").slice(0, 16);
+      const prev = this.checkFingerprints.get(name);
+
+      if (prev === fingerprint) {
+        return false; // Nothing changed
+      }
+
+      this.checkFingerprints.set(name, fingerprint);
+      return true; // Changed (or first run)
+    } catch (err) {
+      // Check command failed — run the agent anyway (may be a transient issue)
+      console.warn(`${ts()} [${name}] check command failed, proceeding with poll:`, err instanceof Error ? err.message : err);
+      return true;
+    }
+  }
+
+  private execCheck(command: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execCb(command, { timeout: 30_000 }, (err, stdout, stderr) => {
+        if (err) reject(new Error(`${err.message}\n${stderr}`));
+        else resolve(stdout);
+      });
+    });
   }
 
   // ── Connector & Audit ───────────────────────────────
