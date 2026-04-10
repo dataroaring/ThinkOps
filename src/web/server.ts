@@ -13,7 +13,7 @@ export function startDashboard(orchestrator: Orchestrator, config: Config): void
 
     try {
       if (path === "/") {
-        return await serveDashboard(res);
+        return await serveDashboard(res, config);
       }
       if (path === "/api/status") {
         return jsonResponse(res, orchestrator.getStatus());
@@ -56,10 +56,11 @@ export function startDashboard(orchestrator: Orchestrator, config: Config): void
   });
 }
 
-async function serveDashboard(res: ServerResponse): Promise<void> {
+async function serveDashboard(res: ServerResponse, config: Config): Promise<void> {
   const htmlPath = resolve(import.meta.dirname!, "dashboard.html");
   try {
-    const html = await readFile(htmlPath, "utf-8");
+    const raw = await readFile(htmlPath, "utf-8");
+    const html = raw.replace(/\{\{BRAND_NAME\}\}/g, config.brandName);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(html);
   } catch {

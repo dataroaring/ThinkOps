@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ThinkOps Dashboard</title>
+<title>{{BRAND_NAME}} Dashboard</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -122,7 +122,7 @@
 <body>
 
 <div class="header">
-  <h1><span class="conn-dot disconnected" id="connDot"></span>ThinkOps</h1>
+  <h1><span class="conn-dot disconnected" id="connDot"></span>{{BRAND_NAME}}</h1>
   <div class="stat"><span class="stat-value" id="uptime">--</span><span class="stat-label">Uptime</span></div>
   <div class="stat"><span class="stat-value" id="completed">0</span><span class="stat-label">Completed</span></div>
   <div class="stat">
@@ -182,7 +182,7 @@
 
   <!-- Recent Completions -->
   <div class="card card-full">
-    <div class="card-title">Recent Completions &mdash; what ThinkOps did</div>
+    <div class="card-title">Recent Completions &mdash; what {{BRAND_NAME}} did</div>
     <div id="completionsList" class="completions-list">
       <div class="empty-state">No completed tasks yet</div>
     </div>

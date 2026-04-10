@@ -179,7 +179,7 @@ export class Orchestrator {
       const max = this.config.taskConcurrency;
 
       const lines = [
-        `*ThinkOps* running for ${uptime}`,
+        `*${this.config.brandName}* running for ${uptime}`,
         `Agent: ${this.config.agentCli}/${this.config.agentModel}`,
         `Connectors: ${connectorCount} | Agents: ${active}/${max}`,
         `Completed: ${this.totalCompleted} | No tasks: ${this.totalNoTasks}`,
@@ -312,7 +312,7 @@ export class Orchestrator {
     const consoleLines = [
       "",
       divider,
-      "  ThinkOps — Startup Plan",
+      `  ${cfg.brandName} — Startup Plan`,
       divider,
       "",
       `  Agent:       ${cfg.agentCli}/${cfg.agentModel}`,
@@ -340,7 +340,7 @@ export class Orchestrator {
 
     // Telegram version (markdown)
     const teleLines = [
-      `*ThinkOps started*`,
+      `*${cfg.brandName} started*`,
       `Agent: ${cfg.agentCli}/${cfg.agentModel}`,
       `Concurrency: ${cfg.taskConcurrency} | Poll: ${cfg.taskPollInterval}s`,
       `Dashboard: http://localhost:${cfg.dashboardPort}`,
@@ -357,7 +357,7 @@ export class Orchestrator {
     }
     teleLines.push("");
     teleLines.push(`Plan: preflight → execute → critic → eval, ${cfg.taskConcurrency} parallel.`);
-    teleLines.push(`\n— ThinkOps 🤖`);
+    teleLines.push(`\n${this.config.brandSignature}`);
 
     return { console: consoleLines.join("\n"), telegram: teleLines.join("\n") };
   }
@@ -619,7 +619,7 @@ export class Orchestrator {
             completed.result ? `\n${completed.result}` : "",
             details ? `\n${details}` : "",
             current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
-            `\n— ThinkOps 🤖`,
+            `\n${this.config.brandSignature}`,
           ].filter(Boolean).join("\n");
           this.bot.notify(notifyLines).catch(() => {});
 
