@@ -493,6 +493,7 @@ export class Orchestrator {
       // Phase 1: Pre-flight analysis — LLM thinks about best approach
       run.startPhase("preflight");
       this.setPhase(name, "preflight");
+      this.emitEvent({ type: "log", connector: name, message: `Analyzing ${name}: reading state, past lessons (${doneCount} prior tasks)`, level: "info", timestamp: Date.now() });
       const preflight = await spawn(this.config, "task-preflight", {
         connector_content: content,
         audit_log: auditLog || "(empty — no tasks completed yet)",
@@ -501,6 +502,7 @@ export class Orchestrator {
 
       const preflightOutput = preflight.output;
       run.log(`pre-flight done (${preflightOutput.length} chars)`);
+      this.emitEvent({ type: "log", connector: name, message: "Pre-flight complete, selecting skills", level: "info", timestamp: Date.now() });
 
       // Select relevant skills
       run.startPhase("skill-select");
@@ -510,6 +512,7 @@ export class Orchestrator {
       // Phase 2: Execute with pre-flight guidance
       run.startPhase("execute");
       this.setPhase(name, "execute");
+      this.emitEvent({ type: "log", connector: name, message: "Fetching task, executing with pre-flight guidance", level: "info", timestamp: Date.now() });
 
       const result = await spawn(this.config, "connector-run", {
         connector_path: path,
@@ -577,10 +580,12 @@ export class Orchestrator {
           run.log(`task done: ${completed.title}`);
           run.log(`result: ${completed.result}`);
           if (completed.dispositions) run.log(`dispositions:\n${completed.dispositions}`);
+          this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: `Task done: ${completed.title} — ${completed.result}`, level: "info", timestamp: Date.now() });
 
           // Run critic agent to challenge the result
           run.startPhase("critic");
           this.setPhase(name, "critic", completed.id, completed.title);
+          this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: "Critic challenging the result", level: "info", timestamp: Date.now() });
           const critique = await this.runCritique(name, content, completed, current.output);
 
           if (critique === "needs_fix" && current.sessionId) {
