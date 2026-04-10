@@ -654,15 +654,133 @@ export class Orchestrator {
 
           console.log(run.summary(`completed ${completed.id}`));
         } else if (!current.humanInputNeeded) {
+          // Task failed — run recovery loop
           run.warn("agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE");
-          this.emitEvent({
-            type: "log",
-            connector: name,
-            message: "Agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE",
-            level: "warn",
-            timestamp: Date.now(),
-          });
-          console.log(run.summary("no result parsed"));
+          const maxAttempts = this.config.maxRecoveryAttempts;
+          let recovered = false;
+
+          for (let attempt = 1; attempt <= maxAttempts && current.sessionId; attempt++) {
+            run.startPhase(`recover (${attempt}/${maxAttempts})`);
+            this.setPhase(name, "recover");
+            this.emitEvent({
+              type: "log",
+              connector: name,
+              message: `Recovery attempt ${attempt}/${maxAttempts} — LLM analyzing failure`,
+              level: "warn",
+              timestamp: Date.now(),
+            });
+
+            const decision = await this.runRecovery(name, content, current.output, attempt, maxAttempts);
+
+            if (decision.action === "retry" && decision.plan) {
+              run.log(`recovery: RETRY — ${decision.analysis}`);
+              run.startPhase(`retry (${attempt}/${maxAttempts})`);
+              this.setPhase(name, "retry");
+              this.emitEvent({
+                type: "log",
+                connector: name,
+                message: `Retrying: ${decision.analysis}`,
+                level: "info",
+                timestamp: Date.now(),
+              });
+
+              current = await resume(
+                this.config,
+                current.sessionId,
+                `Your previous attempt failed. Here is what went wrong and what to do differently:\n\n${decision.analysis}\n\nRecovery plan:\n${decision.plan}\n\nPlease try again following this plan and report TASK_COMPLETED when done.`,
+              );
+
+              // Check if retry succeeded
+              const retryCompleted = parseTaskCompleted(current.output);
+              if (retryCompleted) {
+                run.log(`recovery succeeded on attempt ${attempt}`);
+                completed = retryCompleted;
+                recovered = true;
+                break;
+              }
+              // If still no TASK_COMPLETED, loop continues to next attempt
+            } else if (decision.action === "escalate" && decision.question) {
+              run.log(`recovery: ESCALATE — ${decision.analysis}`);
+              this.emitEvent({
+                type: "log",
+                connector: name,
+                message: `Escalating to human: ${decision.question}`,
+                level: "warn",
+                timestamp: Date.now(),
+              });
+              try {
+                const answer = await this.bot.askQuestion(
+                  `[${name}] Task failed — agent needs help:\n${decision.analysis}\n\n${decision.question}`
+                );
+                run.log(`human replied, resuming with answer`);
+                run.startPhase("execute (recovered)");
+                this.setPhase(name, "execute (recovered)");
+                current = await resume(
+                  this.config,
+                  current.sessionId,
+                  `The task failed previously. A recovery analyst identified the issue: ${decision.analysis}\n\nThe user answered your question: ${answer}\n\nPlease try again with this information and report TASK_COMPLETED when done.`,
+                );
+                const escalateCompleted = parseTaskCompleted(current.output);
+                if (escalateCompleted) {
+                  completed = escalateCompleted;
+                  recovered = true;
+                }
+              } catch {
+                run.warn("escalation timed out");
+              }
+              break; // Don't loop after escalation
+            } else {
+              // ABANDON
+              run.log(`recovery: ABANDON — ${decision.analysis}`);
+              this.emitEvent({
+                type: "log",
+                connector: name,
+                message: `Abandoned: ${decision.analysis}${decision.suggestion ? ` (${decision.suggestion})` : ""}`,
+                level: "error",
+                timestamp: Date.now(),
+              });
+              break;
+            }
+          }
+
+          if (recovered && completed) {
+            // Recovered task goes through the normal completion pipeline
+            run.taskId = completed.id;
+            this.setPhase(name, "completed", completed.id, completed.title);
+            run.log(`recovered task: ${completed.title}`);
+
+            run.startPhase("critic");
+            this.setPhase(name, "critic", completed.id, completed.title);
+            const critique = await this.runCritique(name, content, completed, current.output);
+            if (critique === "needs_fix" && current.sessionId) {
+              run.startPhase("fix-pass");
+              this.setPhase(name, "fix-pass", completed.id, completed.title);
+              current = await resume(this.config, current.sessionId,
+                "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.");
+              const fixed = parseTaskCompleted(current.output);
+              if (fixed) completed = fixed;
+            }
+
+            await this.appendAuditTask(name, completed);
+            this.totalCompleted++;
+            this.connectorDoneCounts.set(name, (this.connectorDoneCounts.get(name) ?? 0) + 1);
+            this.emitEvent({ type: "completed", connector: name, taskId: completed.id,
+              title: completed.title, result: completed.result, cost: current.cost, timestamp: Date.now() });
+            this.bot.notify([
+              `*Task completed (recovered)* [${name}/${completed.id}]`,
+              `*${completed.title}*`,
+              completed.result, `\n${this.config.brandSignature}`,
+            ].filter(Boolean).join("\n")).catch(() => {});
+
+            run.startPhase("eval");
+            this.setPhase(name, "eval", completed.id, completed.title);
+            await this.runEval(name, content, completed, current.output);
+            console.log(run.summary(`recovered + completed ${completed.id}`));
+          } else if (!recovered && maxAttempts > 0) {
+            console.log(run.summary("recovery exhausted"));
+          } else {
+            console.log(run.summary("no result parsed"));
+          }
         }
       }
     } catch (err) {
@@ -784,6 +902,43 @@ export class Orchestrator {
     } catch (err) {
       console.error(`${ts()} [${tag}] critic error:`, err instanceof Error ? err.message : err);
       return "approved"; // Don't block on critic failure
+    }
+  }
+
+  // ── Recovery ────────────────────────────────────────
+
+  private async runRecovery(
+    connectorName: string,
+    connectorContent: string,
+    agentOutput: string,
+    attempt: number,
+    maxAttempts: number
+  ): Promise<{ action: "retry" | "escalate" | "abandon"; analysis: string; plan?: string; question?: string; suggestion?: string }> {
+    try {
+      const result = await spawn(this.config, "task-recover", {
+        connector_content: connectorContent,
+        agent_output: agentOutput.slice(-10_000),
+        attempt_number: String(attempt),
+        max_attempts: String(maxAttempts),
+      }, { label: `recover: ${connectorName} #${attempt}` });
+
+      const output = result.output;
+      const analysis = output.match(/ANALYSIS:\s*(.+)/)?.[1]?.trim() ?? "unknown failure";
+
+      if (output.includes("DECISION: RETRY")) {
+        const plan = output.match(/PLAN:\s*([\s\S]*?)(?:\n```|$)/)?.[1]?.trim();
+        return { action: "retry", analysis, plan };
+      }
+      if (output.includes("DECISION: ESCALATE")) {
+        const question = output.match(/QUESTION:\s*(.+)/)?.[1]?.trim();
+        return { action: "escalate", analysis, question };
+      }
+      // Default to abandon
+      const suggestion = output.match(/SUGGESTION:\s*(.+)/)?.[1]?.trim();
+      return { action: "abandon", analysis, suggestion };
+    } catch (err) {
+      console.error(`${ts()} [${connectorName}] recovery error:`, err instanceof Error ? err.message : err);
+      return { action: "abandon", analysis: "Recovery agent failed" };
     }
   }
 

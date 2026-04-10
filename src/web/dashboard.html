@@ -68,6 +68,8 @@
   .phase-fix-pass { background: rgba(219,109,40,0.15); color: var(--orange); }
   .phase-eval { background: rgba(63,185,80,0.15); color: var(--green); }
   .phase-completed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .phase-recover { background: rgba(248,81,73,0.15); color: var(--red); }
+  .phase-retry { background: rgba(210,153,34,0.15); color: var(--yellow); }
   .phase-human-input { background: rgba(248,81,73,0.15); color: var(--red); }
   .phase-rate-limited { background: rgba(248,81,73,0.15); color: var(--red); }
   .phase-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
@@ -227,6 +229,9 @@
     "eval": "Scoring quality and extracting lessons",
     "completed": "Task finished, awaiting eval",
     "human-input": "Waiting for your reply in Telegram",
+    "recover": "LLM analyzing failure, deciding next step",
+    "retry": "Retrying with a different approach based on LLM analysis",
+    "execute (recovered)": "Resumed after human input on failure",
     "rate-limited": "API rate limit hit, backing off"
   };
 
@@ -251,6 +256,7 @@
       "execute": "execute", "executeresumed": "execute",
       "critic": "critic", "fix-pass": "fix-pass",
       "eval": "eval", "completed": "completed",
+      "recover": "recover", "retry": "retry",
       "human-input": "human-input", "rate-limited": "rate-limited"
     };
     return "phase-" + (map[p] || "idle");
