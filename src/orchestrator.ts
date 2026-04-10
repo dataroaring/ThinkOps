@@ -276,13 +276,84 @@ export class Orchestrator {
       console.error("[orchestrator] dashboard failed to start:", err instanceof Error ? err.message : err);
     }
 
-    console.log("[orchestrator] all loops started");
+    // Print startup summary
+    const summary = await this.buildStartupSummary();
+    console.log(summary.console);
     try {
-      await this.bot.notify("ThinkOps started. All loops active.");
+      await this.bot.notify(summary.telegram);
       console.log("[orchestrator] startup notification sent to telegram");
     } catch (err) {
       console.error("[orchestrator] failed to send startup notification:", err instanceof Error ? err.message : err);
     }
+  }
+
+  private async buildStartupSummary(): Promise<{ console: string; telegram: string }> {
+    const connectors = await this.listConnectors();
+    const connectorDetails: { name: string; source: string; cwd: string; done: number }[] = [];
+
+    for (const c of connectors) {
+      const content = await readFile(c.path, "utf-8");
+      const source = content.match(/##\s*Source\s*\n([\s\S]*?)(?=\n##|\n$)/)?.[1]?.trim() ?? "unknown";
+      const cwd = content.match(/code directory:\s*(.+)/)?.[1]?.trim() ?? "—";
+      const auditLog = await this.loadAuditLog(c.name);
+      const done = (auditLog.match(/\| DONE \|/g) || []).length;
+      connectorDetails.push({ name: c.name, source: source.split("\n")[0], cwd, done });
+    }
+
+    const cfg = this.config;
+    const divider = "─".repeat(50);
+
+    // Console version (plain text)
+    const consoleLines = [
+      "",
+      divider,
+      "  ThinkOps — Startup Plan",
+      divider,
+      "",
+      `  Agent:       ${cfg.agentCli}/${cfg.agentModel}`,
+      `  Concurrency: ${cfg.taskConcurrency} parallel agents`,
+      `  Poll:        every ${cfg.taskPollInterval}s`,
+      `  Dashboard:   http://localhost:${cfg.dashboardPort}`,
+      "",
+      `  Connectors (${connectors.length}):`,
+    ];
+    if (connectorDetails.length === 0) {
+      consoleLines.push("    (none found — add .md files to connectors/)");
+    } else {
+      for (const c of connectorDetails) {
+        consoleLines.push(`    [${c.name}] ${c.done} completed`);
+        consoleLines.push(`      source: ${c.source}`);
+        consoleLines.push(`      cwd:    ${c.cwd}`);
+      }
+    }
+    consoleLines.push("");
+    consoleLines.push(`  Plan: poll each connector every ${cfg.taskPollInterval}s,`);
+    consoleLines.push(`        run up to ${cfg.taskConcurrency} agents in parallel,`);
+    consoleLines.push(`        each task → preflight → execute → critic → eval.`);
+    consoleLines.push("");
+    consoleLines.push(divider);
+
+    // Telegram version (markdown)
+    const teleLines = [
+      `*ThinkOps started*`,
+      `Agent: ${cfg.agentCli}/${cfg.agentModel}`,
+      `Concurrency: ${cfg.taskConcurrency} | Poll: ${cfg.taskPollInterval}s`,
+      `Dashboard: http://localhost:${cfg.dashboardPort}`,
+      "",
+      `*Connectors (${connectors.length}):*`,
+    ];
+    if (connectorDetails.length === 0) {
+      teleLines.push("  (none)");
+    } else {
+      for (const c of connectorDetails) {
+        teleLines.push(`  *${c.name}* — ${c.done} done`);
+        teleLines.push(`    ${c.source}`);
+      }
+    }
+    teleLines.push("");
+    teleLines.push(`Plan: preflight → execute → critic → eval, ${cfg.taskConcurrency} parallel.`);
+
+    return { console: consoleLines.join("\n"), telegram: teleLines.join("\n") };
   }
 
   stop(): void {
