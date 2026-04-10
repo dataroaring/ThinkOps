@@ -218,15 +218,40 @@ code directory: /tmp/my-project
   assert(!!blockD, "Parses TASK_COMPLETED block with dispositions");
   const dispMatch = blockD![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
   assert(!!dispMatch, "Extracts dispositions field");
-  const dispositions = dispMatch![1].trim();
+  // Normalize: trimStart each line, filter empty, join — matches parseTaskCompleted()
+  const dispositions = dispMatch![1].split("\n").map((l: string) => l.trimStart()).filter(Boolean).join("\n");
   assert(dispositions.includes("Addressed"), `Dispositions contain Addressed: ${dispositions}`);
   assert(dispositions.includes("Dismissed"), `Dispositions contain Dismissed: ${dispositions}`);
   assert(dispositions.includes("Left for author"), `Dispositions contain Left for author: ${dispositions}`);
+  // Verify normalization strips leading whitespace from each line
+  for (const line of dispositions.split("\n")) {
+    assert(line === line.trimStart(), `Disposition line should be left-trimmed: "${line}"`);
+  }
 
   // Test TASK_COMPLETED parsing without dispositions (backwards compat)
   const blockNd = output1.match(/TASK_COMPLETED\s*\n([\s\S]*?)(?:\n```|$)/);
   const noDisp = blockNd![1].match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
   assert(!noDisp, "No dispositions field when absent from output");
+
+  // Test audit entry formatting with dispositions
+  {
+    const task = {
+      id: "TEST-1", title: "Test task", result: "Did things",
+      dispositions: "- Comment A — Addressed\n  - Comment B — Dismissed: reason",
+    };
+    const now = "2026-01-01 00:00:00";
+    let entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
+    if (task.dispositions) {
+      const normalized = task.dispositions.split("\n").map((l: string) => `    ${l.trimStart()}`).join("\n");
+      entry += `  dispositions:\n${normalized}\n`;
+    }
+    // Each disposition line should have exactly 4 spaces of indentation
+    const dispLines = entry.split("\n").filter((l: string) => l.trimStart().startsWith("- Comment"));
+    for (const line of dispLines) {
+      assert(line.startsWith("    - Comment"), `Audit disposition line has consistent 4-space indent: "${line}"`);
+    }
+    assert(entry.includes("  dispositions:"), "Audit entry includes dispositions header");
+  }
 
   // Test NO_TASKS_AVAILABLE detection
   const output2 = "Checked Jira, no open issues matching filter.\nNO_TASKS_AVAILABLE";

@@ -17,14 +17,14 @@ interface ActiveAgent {
   phaseStartedAt: number;
 }
 
-/** Per-run logging context — every log line includes connector, run#, taskId, and phase. */
+/** Per-run logging context — every log line includes connector, taskId, and timing. */
 class RunLog {
   private phaseTimings: { phase: string; durationMs: number }[] = [];
   private currentPhaseStart = 0;
+  private currentPhaseName = "";
 
   constructor(
     private connector: string,
-    private runNum: number,
     private _taskId?: string,
   ) {}
 
@@ -52,6 +52,7 @@ class RunLog {
 
   startPhase(phase: string): void {
     this.endPhase();
+    this.currentPhaseName = phase;
     this.currentPhaseStart = Date.now();
     this.log(`▸ ${phase}`);
   }
@@ -59,10 +60,11 @@ class RunLog {
   endPhase(): void {
     if (this.currentPhaseStart > 0) {
       this.phaseTimings.push({
-        phase: this.phaseTimings.length.toString(),
+        phase: this.currentPhaseName,
         durationMs: Date.now() - this.currentPhaseStart,
       });
       this.currentPhaseStart = 0;
+      this.currentPhaseName = "";
     }
   }
 
@@ -465,7 +467,7 @@ export class Orchestrator {
     const pollNum = (this.connectorPolls.get(name) ?? 0) + 1;
     this.connectorPolls.set(name, pollNum);
 
-    const run = new RunLog(name, pollNum);
+    const run = new RunLog(name);
     run.log(`── poll #${pollNum} ──────────────────────`);
 
     const content = await readFile(path, "utf-8");
@@ -710,7 +712,8 @@ export class Orchestrator {
     const now = new Date().toISOString().slice(0, 19).replace("T", " ");
     let entry = `- ${now} | DONE | **${task.id}** | ${task.title} | ${task.result}\n`;
     if (task.dispositions) {
-      entry += `  dispositions:\n${task.dispositions.split("\n").map(l => `    ${l}`).join("\n")}\n`;
+      const normalized = task.dispositions.split("\n").map(l => `    ${l.trimStart()}`).join("\n");
+      entry += `  dispositions:\n${normalized}\n`;
     }
     await appendFile(this.auditPath(connectorName), entry);
   }
@@ -1053,7 +1056,9 @@ function parseTaskCompleted(output: string): { id: string; title: string; result
   const result = lines.match(/^result:\s*(.+)$/m)?.[1]?.trim() ?? "";
   // dispositions is optional (PR tasks only) and may span multiple lines
   const dispMatch = lines.match(/^dispositions:\s*(.*(?:\n\s+-.*)*)/m);
-  const dispositions = dispMatch?.[1]?.trim() || undefined;
+  const dispositions = dispMatch?.[1]
+    ? dispMatch[1].split("\n").map(l => l.trimStart()).filter(Boolean).join("\n") || undefined
+    : undefined;
   return { id, title, result, dispositions };
 }
 
