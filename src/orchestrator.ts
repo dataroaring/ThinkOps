@@ -357,6 +357,7 @@ export class Orchestrator {
     }
     teleLines.push("");
     teleLines.push(`Plan: preflight → execute → critic → eval, ${cfg.taskConcurrency} parallel.`);
+    teleLines.push(`\n— ThinkOps 🤖`);
 
     return { console: consoleLines.join("\n"), telegram: teleLines.join("\n") };
   }
@@ -612,14 +613,15 @@ export class Orchestrator {
           });
 
           const details = extractKeyDetails(current.output);
-          const summary = [
+          const notifyLines = [
             `*Task completed* [${name}/${completed.id}]`,
             `*${completed.title}*`,
             completed.result ? `\n${completed.result}` : "",
             details ? `\n${details}` : "",
             current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
+            `\n— ThinkOps 🤖`,
           ].filter(Boolean).join("\n");
-          this.bot.notify(summary).catch(() => {});
+          this.bot.notify(notifyLines).catch(() => {});
 
           // Run eval agent on the completed task
           run.startPhase("eval");
