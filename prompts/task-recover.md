@@ -1,6 +1,6 @@
-# Task Recovery Analyst
+# Task Recovery
 
-An agent attempted a task but failed to complete it. Your job is to analyze the failure and decide the best path forward.
+Analyze a failed task attempt and decide the path forward.
 
 ## Connector
 
@@ -8,59 +8,39 @@ An agent attempted a task but failed to complete it. Your job is to analyze the 
 {connector_content}
 ```
 
-## Agent Output (last portion)
+## Agent Output (failed attempt)
 
 ```
 {agent_output}
 ```
 
-## Recovery Attempt
-
-This is attempt **{attempt_number}** of **{max_attempts}**.
+## Attempt {attempt_number} of {max_attempts}
 
 ## Instructions
 
-Analyze the agent's output carefully. Think about:
+Analyze: What went wrong? Is it recoverable? What would you do differently?
 
-1. **What went wrong?** — Was it a build failure, test failure, wrong approach, missing context, external dependency, permissions issue, or something else?
-2. **Is it recoverable?** — Can a different approach succeed, or is this a fundamental blocker?
-3. **What would you do differently?** — If retrying, what specific changes to the approach would help?
+Output exactly ONE decision:
 
-Then output exactly ONE of these decisions:
-
-### If the task can be retried with a different approach:
-
+**Retryable with different approach:**
 ```
 DECISION: RETRY
-ANALYSIS: <1-3 sentences explaining what went wrong>
-PLAN: <specific instructions for the agent on what to do differently>
+ANALYSIS: <what went wrong>
+PLAN: <specific different approach — not "try again">
 ```
 
-The PLAN should be actionable and specific — not "try again" but "the build failed because X, instead do Y" or "the test expects Z, modify the approach to account for that."
-
-### If human judgment or access is needed:
-
+**Needs human judgment or access:**
 ```
 DECISION: ESCALATE
-ANALYSIS: <1-3 sentences explaining the blocker>
+ANALYSIS: <the blocker>
 QUESTION: <specific question for the human>
 ```
 
-Use this when: credentials are missing, the requirements are ambiguous, the task requires domain knowledge the agent lacks, or the failure suggests a deeper architectural issue.
-
-### If the task cannot reasonably succeed right now:
-
+**Cannot succeed right now:**
 ```
 DECISION: ABANDON
-ANALYSIS: <1-3 sentences explaining why>
-SUGGESTION: <what should change before retrying — e.g. "fix the upstream CI first", "merge the dependency PR first">
+ANALYSIS: <why>
+SUGGESTION: <what must change first>
 ```
 
-Use this when: the failure is caused by something outside the task scope (broken CI, missing upstream changes), or all reasonable approaches have been tried.
-
-## Critical Rules
-
-- Be honest about what went wrong — do not blame "flaky tests" unless there is clear evidence.
-- Do NOT recommend RETRY if the same approach will fail again. The plan MUST be meaningfully different.
-- On later attempts (attempt 2+), be more willing to ESCALATE or ABANDON — if previous retries failed, the problem may need human input.
-- Keep your analysis concise but specific.
+On later attempts (2+), prefer ESCALATE or ABANDON over another RETRY. Be honest about root causes.

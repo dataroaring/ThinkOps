@@ -25,6 +25,7 @@ const configSchema = z.object({
   skillExtractInterval: z.coerce.number().positive().default(3600),
   skillOrganizeInterval: z.coerce.number().positive().default(86400),
   knowledgeLintInterval: z.coerce.number().positive().default(86400),
+  toolReviewInterval: z.coerce.number().positive().default(2592000),  // 30 days
   dashboardPort: z.coerce.number().positive().default(3120),
   maxRecoveryAttempts: z.coerce.number().min(0).default(2),  // 0 = no recovery
   brandName: z.string().default("ThinkOps"),
@@ -54,6 +55,7 @@ export function loadConfig(): Config {
     skillExtractInterval: process.env.SKILL_EXTRACT_INTERVAL,
     skillOrganizeInterval: process.env.SKILL_ORGANIZE_INTERVAL,
     knowledgeLintInterval: process.env.KNOWLEDGE_LINT_INTERVAL,
+    toolReviewInterval: process.env.TOOL_REVIEW_INTERVAL,
     dashboardPort: process.env.DASHBOARD_PORT,
     maxRecoveryAttempts: process.env.MAX_RECOVERY_ATTEMPTS,
     brandName: process.env.BRAND_NAME,

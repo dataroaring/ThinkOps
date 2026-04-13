@@ -1,21 +1,10 @@
 # Knowledge Query
 
-You are answering a question using the knowledge wiki as your primary source.
+Answer a question using the knowledge wiki.
 
-## Instructions
+1. Read `{vault_path}/knowledge/_schema.md` and `{vault_path}/knowledge/_index.md`.
+2. Read relevant wiki pages.
+3. Answer: **{question}**
+4. Cite pages with `[[wikilinks]]`. If reusable, save to `{vault_path}/knowledge/queries/{slug}.md`.
 
-1. Read `{vault_path}/knowledge/_schema.md` for wiki conventions.
-2. Read `{vault_path}/knowledge/_index.md` to find relevant pages.
-3. Read the relevant wiki pages to gather information.
-4. Synthesize an answer to: **{question}**
-5. Cite specific wiki pages in your answer using `[[wikilinks]]`.
-6. If the answer is substantial and reusable, save it as:
-   `{vault_path}/knowledge/queries/{slug}.md`
-   with appropriate frontmatter (date, question, sources).
-7. Output the answer clearly.
-
-## Guidelines
-
-- If the wiki doesn't contain enough information, say so explicitly.
-- Don't hallucinate facts not supported by wiki pages.
-- Prefer wiki-sourced answers over your general knowledge.
+Don't hallucinate — if wiki lacks info, say so. Prefer wiki sources over general knowledge.

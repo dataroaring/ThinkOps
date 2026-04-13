@@ -280,6 +280,10 @@ export class Orchestrator {
     console.log("[orchestrator] starting skill loops...");
     this.startSkillLoops();
 
+    // Start tool review loop
+    console.log("[orchestrator] starting tool review loop (every %ds)...", this.config.toolReviewInterval);
+    this.startToolLoop();
+
     // Start web dashboard
     console.log("[orchestrator] starting web dashboard...");
     try {
@@ -674,6 +678,11 @@ export class Orchestrator {
             summary: summaryLines,
             timestamp: Date.now(),
           });
+
+          // Extract reusable tools from agent output (background, non-blocking)
+          this.extractTools(current.output, content).catch((err) =>
+            console.error(`[tools] extraction error:`, err)
+          );
 
           console.log(run.summary(`completed ${completed.id}`));
         } else if (!current.humanInputNeeded) {
@@ -1267,6 +1276,34 @@ export class Orchestrator {
     }
   }
 
+  // ── Tool Loop ───────────────────────────────────────────
+
+  private async extractTools(agentOutput: string, connectorContent: string): Promise<void> {
+    // Only extract if output has substantial CLI commands
+    const cmdCount = (agentOutput.match(/\$ |```bash|```sh|gh |curl |jq /g) ?? []).length;
+    if (cmdCount < 2) return;
+
+    console.log("[tools] extracting reusable tools from agent output...");
+    await spawn(this.config, "tool-extract", {
+      agent_output: agentOutput.slice(0, 20_000),
+      connector_content: connectorContent,
+    });
+  }
+
+  private startToolLoop(): void {
+    const reviewInterval = this.config.toolReviewInterval * 1000;
+    const reviewTimer = setInterval(async () => {
+      if (!this.running) return;
+      console.log("[tools] running periodic review...");
+      try {
+        await spawn(this.config, "tool-review", {});
+      } catch (err) {
+        console.error("[tools] review error:", err);
+      }
+    }, reviewInterval);
+    this.timers.push(reviewTimer as unknown as NodeJS.Timeout);
+  }
+
   // ── Vault Setup ────────────────────────────────────────
 
   private async ensureVaultStructure(): Promise<void> {
@@ -1278,6 +1315,8 @@ export class Orchestrator {
       "knowledge/topics",
       "knowledge/queries",
       "skills",
+      "tools",
+      "tools/_archive",
       "thinkops",
       "thinkops/audit",
     ];
