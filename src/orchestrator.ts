@@ -284,6 +284,10 @@ export class Orchestrator {
     console.log("[orchestrator] starting tool review loop (every %ds)...", this.config.toolReviewInterval);
     this.startToolLoop();
 
+    // Start feedback learning loop
+    console.log("[orchestrator] starting feedback loop (every %ds)...", this.config.feedbackCheckInterval);
+    this.startFeedbackLoop();
+
     // Start web dashboard
     console.log("[orchestrator] starting web dashboard...");
     try {
@@ -953,17 +957,45 @@ export class Orchestrator {
   // ── Past Findings ───────────────────────────────────
 
   private async loadPastFindings(connectorName: string): Promise<string> {
-    const findings: string[] = [];
+    const sections: string[] = [];
 
-    // Load eval entries from this connector's audit log
+    // 1. Eval scores from this connector
     const auditLog = await this.loadAuditLog(connectorName);
     const evalLines = auditLog.split("\n").filter((l) => l.includes("| EVAL |"));
     if (evalLines.length > 0) {
-      findings.push("## Past eval scores for this connector:");
-      findings.push(...evalLines.slice(-10)); // Last 10 evals
+      sections.push("## Eval scores (this connector):");
+      sections.push(...evalLines.slice(-10));
     }
 
-    return findings.join("\n");
+    // 2. Feedback outcomes from this connector (what happened after we finished)
+    const feedbackLines = auditLog.split("\n").filter((l) => l.includes("| FEEDBACK |"));
+    if (feedbackLines.length > 0) {
+      sections.push("\n## Outcome feedback (this connector):");
+      sections.push(...feedbackLines.slice(-10));
+    }
+
+    // 3. Cross-connector patterns — recent feedback from other connectors
+    try {
+      const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
+      const files = (await readdir(auditDir)).filter(
+        (f) => f.endsWith(".md") && f !== `${connectorName}.md`
+      );
+      const crossFeedback: string[] = [];
+      for (const file of files.slice(0, 5)) { // Cap at 5 other connectors
+        const content = await readFile(resolve(auditDir, file), "utf-8");
+        const cn = file.replace(/\.md$/, "");
+        const fb = content.split("\n").filter((l) => l.includes("| FEEDBACK |") && !l.includes("unchanged"));
+        if (fb.length > 0) {
+          crossFeedback.push(`[${cn}] ${fb.slice(-3).join("\n")}`);
+        }
+      }
+      if (crossFeedback.length > 0) {
+        sections.push("\n## Cross-connector feedback (patterns from other work):");
+        sections.push(...crossFeedback);
+      }
+    } catch { /* no audit dir yet */ }
+
+    return sections.join("\n");
   }
 
   // ── Critique ─────────────────────────────────────────
@@ -1302,6 +1334,128 @@ export class Orchestrator {
       }
     }, reviewInterval);
     this.timers.push(reviewTimer as unknown as NodeJS.Timeout);
+  }
+
+  // ── Feedback Loop (learning from outcomes) ──────────────
+
+  private startFeedbackLoop(): void {
+    const interval = this.config.feedbackCheckInterval * 1000;
+    const timer = setInterval(async () => {
+      if (!this.running) return;
+      await this.runFeedbackCycle();
+    }, interval);
+    this.timers.push(timer as unknown as NodeJS.Timeout);
+  }
+
+  private async runFeedbackCycle(): Promise<void> {
+    console.log("[feedback] checking outcomes of completed tasks...");
+    try {
+      // Collect recent DONE tasks across all connectors that haven't been feedback-checked
+      const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
+      let entries: { name: string }[];
+      try {
+        entries = await readdir(auditDir, { withFileTypes: false }) as unknown as { name: string }[];
+      } catch {
+        return; // No audit dir yet
+      }
+
+      const files = (await readdir(auditDir)).filter((f) => f.endsWith(".md"));
+      const tasksToCheck: string[] = [];
+
+      for (const file of files) {
+        const content = await readFile(resolve(auditDir, file), "utf-8");
+        const connectorName = file.replace(/\.md$/, "");
+        // Find DONE entries that don't have a FEEDBACK entry following them
+        const lines = content.split("\n");
+        const feedbackIds = new Set(
+          lines.filter((l) => l.includes("| FEEDBACK |")).map((l) => l.match(/\*\*(.+?)\*\*/)?.[1]).filter(Boolean)
+        );
+        const doneLines = lines.filter((l) => l.includes("| DONE |"));
+        for (const line of doneLines.slice(-20)) { // Check last 20 completed tasks
+          const id = line.match(/\*\*(.+?)\*\*/)?.[1];
+          if (id && !feedbackIds.has(id)) {
+            const title = line.split("|")[3]?.trim() ?? "";
+            const result = line.split("|")[4]?.trim() ?? "";
+            tasksToCheck.push(`- [${connectorName}] **${id}** | ${title} | ${result}`);
+          }
+        }
+      }
+
+      if (tasksToCheck.length === 0) {
+        console.log("[feedback] no unchecked tasks");
+        return;
+      }
+
+      console.log(`[feedback] checking ${tasksToCheck.length} tasks for outcomes...`);
+
+      // Phase 1: Collect feedback signals
+      const checkResult = await spawn(this.config, "feedback-check", {
+        tasks_to_check: tasksToCheck.join("\n"),
+      });
+
+      // Parse FEEDBACK lines
+      const feedbackLines = checkResult.output.split("\n").filter((l) => l.startsWith("id:") || l.startsWith("outcome:") || l.startsWith("signal:"));
+      if (feedbackLines.length === 0) {
+        console.log("[feedback] no new signals found");
+        return;
+      }
+
+      // Record feedback in audit logs
+      const feedbacks = this.parseFeedbackOutput(checkResult.output);
+      for (const fb of feedbacks) {
+        const connectorName = fb.connector;
+        if (connectorName) {
+          const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+          const entry = `- ${now} | FEEDBACK | **${fb.id}** | ${fb.outcome} | ${fb.signal}\n`;
+          await appendFile(this.auditPath(connectorName), entry);
+        }
+      }
+
+      // Phase 2: Learn from signals (only if there are meaningful signals)
+      const meaningful = feedbacks.filter((f) => f.outcome !== "unchanged" && f.outcome !== "unknown");
+      if (meaningful.length === 0) return;
+
+      console.log(`[feedback] learning from ${meaningful.length} outcome signals...`);
+      const signalsSummary = meaningful.map((f) =>
+        `- [${f.connector}] **${f.id}**: ${f.outcome} — ${f.signal}`
+      ).join("\n");
+
+      // Load connector content for context
+      const connectorPaths = [...new Set(meaningful.map((f) => f.connector).filter(Boolean))];
+      let taskContext = "";
+      for (const cn of connectorPaths.slice(0, 3)) {
+        try {
+          const auditLog = await this.loadAuditLog(cn!);
+          taskContext += `## ${cn} audit (last 20 lines):\n${auditLog.split("\n").slice(-20).join("\n")}\n\n`;
+        } catch { /* skip */ }
+      }
+
+      await spawn(this.config, "feedback-learn", {
+        feedback_signals: signalsSummary,
+        task_context: taskContext,
+      });
+
+      console.log("[feedback] learning cycle complete");
+    } catch (err) {
+      console.error("[feedback] cycle error:", err);
+    }
+  }
+
+  private parseFeedbackOutput(output: string): Array<{ connector?: string; id: string; outcome: string; signal: string }> {
+    const results: Array<{ connector?: string; id: string; outcome: string; signal: string }> = [];
+    const blocks = output.split("FEEDBACK").slice(1);
+    for (const block of blocks) {
+      const id = block.match(/id:\s*\[?(\S+?)\]?\s*\*?\*?(\S+?)\*?\*?/)?.[0]?.replace(/^id:\s*/, "").replace(/\*\*/g, "").trim() ?? "";
+      const connectorMatch = id.match(/^\[(.+?)\]\s*(.+)/);
+      const connector = connectorMatch?.[1];
+      const taskId = connectorMatch?.[2] ?? id;
+      const outcome = block.match(/outcome:\s*(\S+)/)?.[1] ?? "unknown";
+      const signal = block.match(/signal:\s*(.+)/)?.[1]?.trim() ?? "";
+      if (taskId) {
+        results.push({ connector, id: taskId, outcome, signal });
+      }
+    }
+    return results;
   }
 
   // ── Vault Setup ────────────────────────────────────────
