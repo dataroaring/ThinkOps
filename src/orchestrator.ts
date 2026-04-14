@@ -314,7 +314,7 @@ export class Orchestrator {
 
     for (const c of connectors) {
       const content = await readFile(c.path, "utf-8");
-      const source = content.match(/##\s*Source\s*\n([\s\S]*?)(?=\n##|\n$)/)?.[1]?.trim() ?? "unknown";
+      const source = content.match(/##\s*Source\s*\n([\s\S]*?)(?=\n##|\n$)/)?.[1]?.trim() ?? (content.split("\n")[0]?.replace(/^#+\s*/, "").trim() || "unknown");
       const cwd = content.match(/code directory:\s*(.+)/)?.[1]?.trim() ?? "—";
       const auditLog = await this.loadAuditLog(c.name);
       const done = (auditLog.match(/\| DONE \|/g) || []).length;
@@ -876,25 +876,9 @@ export class Orchestrator {
     const dir = resolve(this.config.vaultPath, "connectors");
     try {
       const files = await readdir(dir);
-      const candidates = files
+      return files
         .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
         .map((f) => ({ name: f.replace(".md", ""), path: join(dir, f) }));
-
-      // Validate each file is a real connector (must have ## Source to function)
-      const valid: { name: string; path: string }[] = [];
-      for (const c of candidates) {
-        try {
-          const content = await readFile(c.path, "utf-8");
-          if (/^##\s+Source/m.test(content)) {
-            valid.push(c);
-          } else {
-            console.warn(`${ts()} [orchestrator] skipping ${c.name}: no '## Source' section (not a valid connector)`);
-          }
-        } catch {
-          // File disappeared between readdir and readFile — skip
-        }
-      }
-      return valid;
     } catch {
       return [];
     }
@@ -1206,7 +1190,7 @@ export class Orchestrator {
 
     // Periodic lint
     const lintInterval = this.config.knowledgeLintInterval * 1000;
-    const lintTimer = setInterval(async () => {
+    const lintLoop = async () => {
       if (!this.running) return;
       console.log("[knowledge] running lint...");
       try {
@@ -1214,8 +1198,13 @@ export class Orchestrator {
       } catch (err) {
         console.error("[knowledge] lint error:", err);
       }
-    }, lintInterval);
-    this.timers.push(lintTimer as unknown as NodeJS.Timeout);
+      if (this.running) {
+        const timer = setTimeout(lintLoop, lintInterval);
+        this.timers.push(timer);
+      }
+    };
+    const lintTimer = setTimeout(lintLoop, lintInterval);
+    this.timers.push(lintTimer);
   }
 
   // ── Skill Loop ─────────────────────────────────────────
@@ -1223,15 +1212,20 @@ export class Orchestrator {
   private startSkillLoops(): void {
     // Periodic skill extraction from conversation history
     const extractInterval = this.config.skillExtractInterval * 1000;
-    const extractTimer = setInterval(async () => {
+    const extractLoop = async () => {
       if (!this.running) return;
       await this.runSkillExtraction();
-    }, extractInterval);
-    this.timers.push(extractTimer as unknown as NodeJS.Timeout);
+      if (this.running) {
+        const timer = setTimeout(extractLoop, extractInterval);
+        this.timers.push(timer);
+      }
+    };
+    const extractTimer = setTimeout(extractLoop, extractInterval);
+    this.timers.push(extractTimer);
 
     // Less frequent skill organization
     const organizeInterval = this.config.skillOrganizeInterval * 1000;
-    const organizeTimer = setInterval(async () => {
+    const organizeLoop = async () => {
       if (!this.running) return;
       console.log("[skills] running organize...");
       try {
@@ -1239,8 +1233,13 @@ export class Orchestrator {
       } catch (err) {
         console.error("[skills] organize error:", err);
       }
-    }, organizeInterval);
-    this.timers.push(organizeTimer as unknown as NodeJS.Timeout);
+      if (this.running) {
+        const timer = setTimeout(organizeLoop, organizeInterval);
+        this.timers.push(timer);
+      }
+    };
+    const organizeTimer = setTimeout(organizeLoop, organizeInterval);
+    this.timers.push(organizeTimer);
   }
 
   private async runSkillExtraction(): Promise<void> {
@@ -1291,13 +1290,13 @@ export class Orchestrator {
     }
   }
 
-  /** Ensure connectors/findings.md exists with proper ## Source header. */
+  /** Ensure connectors/findings.md exists. */
   private async ensureFindingsConnector(filePath: string): Promise<void> {
     try {
       await stat(filePath);
     } catch {
       const header = [
-        "## Source",
+        "# Findings",
         "Improvement findings discovered by the eval pipeline.",
         "Each unchecked item is a task to address.",
         "",
@@ -1324,7 +1323,7 @@ export class Orchestrator {
 
   private startToolLoop(): void {
     const reviewInterval = this.config.toolReviewInterval * 1000;
-    const reviewTimer = setInterval(async () => {
+    const loop = async () => {
       if (!this.running) return;
       console.log("[tools] running periodic review...");
       try {
@@ -1332,19 +1331,29 @@ export class Orchestrator {
       } catch (err) {
         console.error("[tools] review error:", err);
       }
-    }, reviewInterval);
-    this.timers.push(reviewTimer as unknown as NodeJS.Timeout);
+      if (this.running) {
+        const timer = setTimeout(loop, reviewInterval);
+        this.timers.push(timer);
+      }
+    };
+    const timer = setTimeout(loop, reviewInterval);
+    this.timers.push(timer);
   }
 
   // ── Feedback Loop (learning from outcomes) ──────────────
 
   private startFeedbackLoop(): void {
     const interval = this.config.feedbackCheckInterval * 1000;
-    const timer = setInterval(async () => {
+    const loop = async () => {
       if (!this.running) return;
       await this.runFeedbackCycle();
-    }, interval);
-    this.timers.push(timer as unknown as NodeJS.Timeout);
+      if (this.running) {
+        const timer = setTimeout(loop, interval);
+        this.timers.push(timer);
+      }
+    };
+    const timer = setTimeout(loop, interval);
+    this.timers.push(timer);
   }
 
   private async runFeedbackCycle(): Promise<void> {

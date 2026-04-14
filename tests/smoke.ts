@@ -189,30 +189,21 @@ code directory: /tmp/my-project
   // _meta files should be skipped
   await writeFile(resolve(TEST_DIR, "connectors/_template.md"), "# Template\nNot a connector.");
 
-  // Agent-generated files without ## Source should be skipped
-  await writeFile(resolve(TEST_DIR, "connectors/jira-audit.md"), "# Jira Audit Report\nSome agent-generated content.\n- [ ] Fix something");
-  await writeFile(resolve(TEST_DIR, "connectors/thinkops.md"), "# Findings\n- [ ] Improve error handling");
+  // Additional connector files (any .md that doesn't start with _ is valid)
+  await writeFile(resolve(TEST_DIR, "connectors/jira-audit.md"), "# Jira Audit Report\nSome content.\n- [ ] Fix something");
 
-  // Simulate listConnectors logic (with validation)
-  const { readdir: rd, readFile: rf } = await import("fs/promises");
+  // Simulate listConnectors logic (no ## Source validation — any .md file is a valid connector)
+  const { readdir: rd } = await import("fs/promises");
   const dir = resolve(TEST_DIR, "connectors");
   const files = await rd(dir);
-  const candidates = files
+  const connectors = files
     .filter((f: string) => f.endsWith(".md") && !f.startsWith("_"))
     .map((f: string) => ({ name: f.replace(".md", ""), path: resolve(dir, f) }));
-  const connectors: { name: string; path: string }[] = [];
-  for (const c of candidates) {
-    const content = await rf(c.path, "utf-8");
-    if (/^##\s+Source/m.test(content)) {
-      connectors.push(c);
-    }
-  }
 
-  assert(connectors.length === 2, `Found 2 valid connectors, skipped invalid ones (got ${connectors.length})`);
+  assert(connectors.length === 3, `Found 3 valid connectors (got ${connectors.length})`);
   assert(connectors.some((c: { name: string }) => c.name === "doris"), "Found doris connector");
   assert(connectors.some((c: { name: string }) => c.name === "my-project"), "Found my-project connector");
-  assert(!connectors.some((c: { name: string }) => c.name === "jira-audit"), "Agent-generated jira-audit skipped (no ## Source)");
-  assert(!connectors.some((c: { name: string }) => c.name === "thinkops"), "Agent-generated thinkops skipped (no ## Source)");
+  assert(connectors.some((c: { name: string }) => c.name === "jira-audit"), "Found jira-audit connector");
 
   // Test TASK_COMPLETED parsing
   const output1 = `Some agent output...\nTASK_COMPLETED\nid: DORIS-1234\ntitle: Fix BE memory leak\nresult: Created PR https://github.com/apache/doris/pull/999\n`;
