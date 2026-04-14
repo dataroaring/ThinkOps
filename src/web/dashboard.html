@@ -119,6 +119,50 @@
   .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .conn-dot.connected { background: var(--green); }
   .conn-dot.disconnected { background: var(--red); }
+
+  /* Loop stats */
+  .loops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+  .loop-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .loop-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .loop-name { font-weight: 600; font-size: 14px; }
+  .loop-status { font-size: 12px; padding: 2px 8px; border-radius: 12px; }
+  .loop-status-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
+  .loop-status-running { background: rgba(56,139,253,0.15); color: var(--blue); }
+  .loop-meta { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .loop-history { margin-top: 8px; }
+  .loop-history-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; }
+  .loop-history-toggle:hover { text-decoration: underline; }
+  .loop-history-list { margin-top: 6px; font-size: 11px; font-family: 'SF Mono', Monaco, Consolas, monospace; max-height: 150px; overflow-y: auto; }
+  .loop-run { padding: 2px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+  .loop-run:last-child { border-bottom: none; }
+  .loop-run-ok { color: var(--green); }
+  .loop-run-error { color: var(--red); }
+
+  /* Tools & Skills */
+  .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .item-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer; transition: border-color 0.2s; }
+  .item-card:hover { border-color: var(--accent); }
+  .item-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .item-path { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace; }
+  .item-preview { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; justify-content: center; align-items: center; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 90%; max-width: 700px; max-height: 80vh; display: flex; flex-direction: column; }
+  .modal-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .modal-header h2 { font-size: 16px; font-weight: 600; }
+  .modal-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+  .modal-close:hover { color: var(--text); }
+  .modal-body { padding: 16px; overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; white-space: pre-wrap; line-height: 1.5; }
+
+  /* Tabs */
+  .tab-bar { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .tab-btn { background: none; border: none; color: var(--muted); padding: 8px 16px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
 </style>
 </head>
 <body>
@@ -190,6 +234,33 @@
     </div>
   </div>
 
+  <!-- Background Loops -->
+  <div class="card card-full">
+    <div class="card-title">Background Loops &mdash; periodic tasks and their history</div>
+    <div class="loops-grid" id="loopsGrid">
+      <div class="empty-state">Loading loops...</div>
+    </div>
+  </div>
+
+  <!-- Tools & Skills -->
+  <div class="card card-full">
+    <div class="card-title">Tools &amp; Skills &mdash; learned knowledge (click to view)</div>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="tools-tab">Tools</button>
+      <button class="tab-btn" data-tab="skills-tab">Skills</button>
+    </div>
+    <div id="tools-tab" class="tab-content active">
+      <div class="items-grid" id="toolsGrid">
+        <div class="empty-state">No tools yet</div>
+      </div>
+    </div>
+    <div id="skills-tab" class="tab-content">
+      <div class="items-grid" id="skillsGrid">
+        <div class="empty-state">No skills yet</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Connectors -->
   <div class="card">
     <div class="card-title">Connectors &mdash; task sources</div>
@@ -206,6 +277,17 @@
       <select id="logFilter"><option value="">All connectors</option></select>
     </div>
     <div class="log-feed" id="logFeed"></div>
+  </div>
+</div>
+
+<!-- Content viewer modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">Title</h2>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
   </div>
 </div>
 
@@ -529,12 +611,155 @@
     };
   }
 
+  // --- Loops ---
+  function refreshLoops() {
+    fetchJSON("/api/loops", function(loops) {
+      var grid = document.getElementById("loopsGrid");
+      clearChildren(grid);
+      if (!loops || loops.length === 0) {
+        grid.appendChild(el("div", "empty-state", "No loops registered"));
+        return;
+      }
+      loops.forEach(function(loop) {
+        var card = el("div", "loop-card");
+
+        var header = el("div", "loop-card-header");
+        header.appendChild(el("span", "loop-name", loop.name));
+        var statusCls = loop.running ? "loop-status loop-status-running" : "loop-status loop-status-idle";
+        var statusText = loop.running ? "running" : "idle";
+        header.appendChild(el("span", statusCls, statusText));
+        card.appendChild(header);
+
+        var meta = el("div", "loop-meta");
+        meta.appendChild(el("div", null, "Interval: " + fmtIntervalHuman(loop.intervalSecs)));
+        meta.appendChild(el("div", null, "Runs: " + loop.runCount));
+        meta.appendChild(el("div", null, "Last run: " + (loop.lastRunAt ? fmtTimeAgo(loop.lastRunAt) : "never")));
+        meta.appendChild(el("div", null, "Next run: " + (loop.nextRunAt ? fmtTimeAgo(loop.nextRunAt) : (loop.running ? "in progress" : "—"))));
+        card.appendChild(meta);
+
+        // History toggle
+        if (loop.history && loop.history.length > 0) {
+          var histDiv = el("div", "loop-history");
+          var toggle = el("button", "loop-history-toggle", "Show history (" + loop.history.length + " runs)");
+          var list = el("div", "loop-history-list");
+          list.style.display = "none";
+          toggle.addEventListener("click", function() {
+            if (list.style.display === "none") {
+              list.style.display = "block";
+              toggle.textContent = "Hide history";
+            } else {
+              list.style.display = "none";
+              toggle.textContent = "Show history (" + loop.history.length + " runs)";
+            }
+          });
+          // Most recent first
+          loop.history.slice().reverse().forEach(function(run) {
+            var row = el("div", "loop-run");
+            row.appendChild(el("span", "log-time", fmtTime(run.startedAt)));
+            row.appendChild(el("span", run.outcome === "ok" ? "loop-run-ok" : "loop-run-error", run.outcome === "ok" ? "OK" : "ERR"));
+            row.appendChild(el("span", null, fmtDuration(run.durationMs)));
+            if (run.error) {
+              row.appendChild(el("span", "loop-run-error", run.error.slice(0, 60)));
+            }
+            list.appendChild(row);
+          });
+          histDiv.appendChild(toggle);
+          histDiv.appendChild(list);
+          card.appendChild(histDiv);
+        }
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  function fmtIntervalHuman(secs) {
+    if (secs < 60) return secs + "s";
+    if (secs < 3600) return Math.round(secs / 60) + "m";
+    if (secs < 86400) return Math.round(secs / 3600) + "h";
+    return Math.round(secs / 86400) + "d";
+  }
+
+  function fmtTimeAgo(ts) {
+    var diff = Date.now() - ts;
+    if (diff < 0) return "in " + fmtDuration(-diff);
+    if (diff < 1000) return "just now";
+    return fmtDuration(diff) + " ago";
+  }
+
+  // --- Tools & Skills ---
+  function refreshTools() {
+    fetchJSON("/api/tools", function(tools) {
+      var grid = document.getElementById("toolsGrid");
+      clearChildren(grid);
+      if (!tools || tools.length === 0) {
+        grid.appendChild(el("div", "empty-state", "No tools yet"));
+        return;
+      }
+      tools.forEach(function(t) {
+        var card = el("div", "item-card");
+        card.appendChild(el("div", "item-name", t.name));
+        card.appendChild(el("div", "item-path", t.path));
+        var preview = t.content.split("\n").slice(0, 4).join("\n").slice(0, 200);
+        card.appendChild(el("div", "item-preview", preview));
+        card.addEventListener("click", function() { openModal("Tool: " + t.name, t.content); });
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  function refreshSkills() {
+    fetchJSON("/api/skills", function(skills) {
+      var grid = document.getElementById("skillsGrid");
+      clearChildren(grid);
+      if (!skills || skills.length === 0) {
+        grid.appendChild(el("div", "empty-state", "No skills yet"));
+        return;
+      }
+      skills.forEach(function(s) {
+        var card = el("div", "item-card");
+        card.appendChild(el("div", "item-name", s.name));
+        card.appendChild(el("div", "item-path", s.path));
+        var preview = s.content.split("\n").slice(0, 4).join("\n").slice(0, 200);
+        card.appendChild(el("div", "item-preview", preview));
+        card.addEventListener("click", function() { openModal("Skill: " + s.name, s.content); });
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  // --- Tabs ---
+  document.querySelectorAll(".tab-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      document.querySelectorAll(".tab-btn").forEach(function(b) { b.classList.remove("active"); });
+      document.querySelectorAll(".tab-content").forEach(function(c) { c.classList.remove("active"); });
+      btn.classList.add("active");
+      document.getElementById(btn.getAttribute("data-tab")).classList.add("active");
+    });
+  });
+
+  // --- Modal ---
+  function openModal(title, content) {
+    document.getElementById("modalTitle").textContent = title;
+    document.getElementById("modalBody").textContent = content;
+    document.getElementById("modalOverlay").classList.add("active");
+  }
+  document.getElementById("modalClose").addEventListener("click", function() {
+    document.getElementById("modalOverlay").classList.remove("active");
+  });
+  document.getElementById("modalOverlay").addEventListener("click", function(e) {
+    if (e.target === this) this.classList.remove("active");
+  });
+
   // --- Init ---
   refreshStatus();
   refreshAgents();
   refreshConnectors();
+  refreshLoops();
+  refreshTools();
+  refreshSkills();
   connectSSE();
-  setInterval(function() { refreshStatus(); refreshAgents(); refreshConnectors(); }, 10000);
+  setInterval(function() { refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); }, 10000);
+  setInterval(function() { refreshTools(); refreshSkills(); }, 60000);
 })();
 </script>
 </body>

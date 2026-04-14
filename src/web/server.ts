@@ -30,6 +30,17 @@ export function startDashboard(orchestrator: Orchestrator, config: Config): void
         const entries = parseAuditEntries(log);
         return jsonResponse(res, entries);
       }
+      if (path === "/api/loops") {
+        return jsonResponse(res, orchestrator.getLoopStats());
+      }
+      if (path === "/api/tools") {
+        const tools = await orchestrator.getTools();
+        return jsonResponse(res, tools);
+      }
+      if (path === "/api/skills") {
+        const skills = await orchestrator.getSkills();
+        return jsonResponse(res, skills);
+      }
       if (path === "/api/events") {
         return handleSSE(res, orchestrator);
       }

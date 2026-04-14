@@ -19,6 +19,26 @@ interface ActiveAgent {
   phaseStartedAt: number;
 }
 
+interface LoopRun {
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  outcome: "ok" | "error";
+  error?: string;
+}
+
+interface LoopState {
+  name: string;
+  intervalSecs: number;
+  runCount: number;
+  lastRunAt: number | null;
+  nextRunAt: number | null;
+  running: boolean;
+  history: LoopRun[];
+}
+
+const LOOP_HISTORY_SIZE = 20;
+
 /** Per-run logging context — every log line includes connector, taskId, and timing. */
 class RunLog {
   private phaseTimings: { phase: string; durationMs: number }[] = [];
@@ -123,6 +143,9 @@ export class Orchestrator {
   /** Fingerprint of last ## Check output per connector — skip poll when unchanged. */
   private checkFingerprints = new Map<string, string>();
 
+  /** Background loop tracking for dashboard. */
+  private loopStates = new Map<string, LoopState>();
+
   constructor(private config: Config) {
     this.bot = new TelegramBot(config);
     this.registerCommands();
@@ -177,6 +200,87 @@ export class Orchestrator {
       stats.push({ name, polls, doneCount: this.connectorDoneCounts.get(name) ?? 0 });
     }
     return stats;
+  }
+
+  /** Get background loop stats for the dashboard. */
+  getLoopStats(): LoopState[] {
+    return [...this.loopStates.values()];
+  }
+
+  /** List tools from vault. */
+  async getTools(): Promise<{ name: string; path: string; content: string }[]> {
+    const dir = resolve(this.config.vaultPath, "tools");
+    try {
+      const files = await readdir(dir);
+      const tools: { name: string; path: string; content: string }[] = [];
+      for (const f of files) {
+        if (!f.endsWith(".md") || f.startsWith("_")) continue;
+        try {
+          const content = await readFile(resolve(dir, f), "utf-8");
+          tools.push({ name: f.replace(".md", ""), path: `tools/${f}`, content });
+        } catch { /* skip */ }
+      }
+      return tools;
+    } catch { return []; }
+  }
+
+  /** List skills from vault (reads _tree.md index + individual files). */
+  async getSkills(): Promise<{ name: string; path: string; content: string }[]> {
+    const dir = resolve(this.config.vaultPath, "skills");
+    try {
+      return await this.readSkillDir(dir, "skills");
+    } catch { return []; }
+  }
+
+  private async readSkillDir(dir: string, prefix: string): Promise<{ name: string; path: string; content: string }[]> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const results: { name: string; path: string; content: string }[] = [];
+    for (const e of entries) {
+      if (e.name.startsWith("_")) continue;
+      const full = resolve(dir, e.name);
+      if (e.isDirectory()) {
+        results.push(...await this.readSkillDir(full, `${prefix}/${e.name}`));
+      } else if (e.name.endsWith(".md")) {
+        try {
+          const content = await readFile(full, "utf-8");
+          results.push({ name: e.name.replace(".md", ""), path: `${prefix}/${e.name}`, content });
+        } catch { /* skip */ }
+      }
+    }
+    return results;
+  }
+
+  /** Initialize a loop tracker. */
+  private initLoop(name: string, intervalSecs: number): void {
+    this.loopStates.set(name, {
+      name, intervalSecs, runCount: 0,
+      lastRunAt: null, nextRunAt: Date.now() + intervalSecs * 1000,
+      running: false, history: [],
+    });
+  }
+
+  /** Record a loop run starting. */
+  private loopStart(name: string): void {
+    const s = this.loopStates.get(name);
+    if (s) { s.running = true; s.nextRunAt = null; }
+  }
+
+  /** Record a loop run finishing. */
+  private loopFinish(name: string, startedAt: number, err?: unknown): void {
+    const s = this.loopStates.get(name);
+    if (!s) return;
+    const now = Date.now();
+    s.running = false;
+    s.runCount++;
+    s.lastRunAt = now;
+    s.nextRunAt = now + s.intervalSecs * 1000;
+    const run: LoopRun = {
+      startedAt, finishedAt: now, durationMs: now - startedAt,
+      outcome: err ? "error" : "ok",
+      error: err instanceof Error ? err.message : err ? String(err) : undefined,
+    };
+    s.history.push(run);
+    if (s.history.length > LOOP_HISTORY_SIZE) s.history.shift();
   }
 
   private registerCommands(): void {
@@ -267,6 +371,14 @@ export class Orchestrator {
       console.error("[orchestrator] telegram bot failed to start:", err instanceof Error ? err.message : err);
       console.error("[orchestrator] continuing without telegram. Run: thinkops --check");
     }
+
+    // Init loop trackers
+    this.initLoop("connectors", this.config.taskPollInterval);
+    this.initLoop("knowledge-lint", this.config.knowledgeLintInterval);
+    this.initLoop("skill-extract", this.config.skillExtractInterval);
+    this.initLoop("skill-organize", this.config.skillOrganizeInterval);
+    this.initLoop("tool-review", this.config.toolReviewInterval);
+    this.initLoop("feedback", this.config.feedbackCheckInterval);
 
     // Start task loops (parallel, one per connector)
     console.log("[orchestrator] starting task loops (concurrency=%d, poll every %ds)...", this.config.taskConcurrency, this.config.taskPollInterval);
@@ -428,11 +540,16 @@ export class Orchestrator {
         return;
       }
 
+      const start = Date.now();
+      this.loopStart("connectors");
+      let err: unknown;
       try {
         await this.runConnector(name, path);
-      } catch (err) {
-        console.error(`${ts()} [${name}] error:`, err);
+      } catch (e) {
+        err = e;
+        console.error(`${ts()} [${name}] error:`, e);
       }
+      this.loopFinish("connectors", start, err);
       if (this.running) {
         const timer = setTimeout(poll, this.config.taskPollInterval * 1000);
         this.timers.push(timer);
@@ -1192,12 +1309,17 @@ export class Orchestrator {
     const lintInterval = this.config.knowledgeLintInterval * 1000;
     const lintLoop = async () => {
       if (!this.running) return;
+      const start = Date.now();
+      this.loopStart("knowledge-lint");
       console.log("[knowledge] running lint...");
+      let err: unknown;
       try {
         await spawn(this.config, "knowledge-lint", {});
-      } catch (err) {
-        console.error("[knowledge] lint error:", err);
+      } catch (e) {
+        err = e;
+        console.error("[knowledge] lint error:", e);
       }
+      this.loopFinish("knowledge-lint", start, err);
       if (this.running) {
         const timer = setTimeout(lintLoop, lintInterval);
         this.timers.push(timer);
@@ -1214,7 +1336,13 @@ export class Orchestrator {
     const extractInterval = this.config.skillExtractInterval * 1000;
     const extractLoop = async () => {
       if (!this.running) return;
-      await this.runSkillExtraction();
+      const start = Date.now();
+      this.loopStart("skill-extract");
+      let err: unknown;
+      try {
+        await this.runSkillExtraction();
+      } catch (e) { err = e; }
+      this.loopFinish("skill-extract", start, err);
       if (this.running) {
         const timer = setTimeout(extractLoop, extractInterval);
         this.timers.push(timer);
@@ -1227,12 +1355,17 @@ export class Orchestrator {
     const organizeInterval = this.config.skillOrganizeInterval * 1000;
     const organizeLoop = async () => {
       if (!this.running) return;
+      const start = Date.now();
+      this.loopStart("skill-organize");
       console.log("[skills] running organize...");
+      let err: unknown;
       try {
         await spawn(this.config, "skill-organize", {});
-      } catch (err) {
-        console.error("[skills] organize error:", err);
+      } catch (e) {
+        err = e;
+        console.error("[skills] organize error:", e);
       }
+      this.loopFinish("skill-organize", start, err);
       if (this.running) {
         const timer = setTimeout(organizeLoop, organizeInterval);
         this.timers.push(timer);
@@ -1325,12 +1458,17 @@ export class Orchestrator {
     const reviewInterval = this.config.toolReviewInterval * 1000;
     const loop = async () => {
       if (!this.running) return;
+      const start = Date.now();
+      this.loopStart("tool-review");
       console.log("[tools] running periodic review...");
+      let err: unknown;
       try {
         await spawn(this.config, "tool-review", {});
-      } catch (err) {
-        console.error("[tools] review error:", err);
+      } catch (e) {
+        err = e;
+        console.error("[tools] review error:", e);
       }
+      this.loopFinish("tool-review", start, err);
       if (this.running) {
         const timer = setTimeout(loop, reviewInterval);
         this.timers.push(timer);
@@ -1346,7 +1484,15 @@ export class Orchestrator {
     const interval = this.config.feedbackCheckInterval * 1000;
     const loop = async () => {
       if (!this.running) return;
-      await this.runFeedbackCycle();
+      const start = Date.now();
+      this.loopStart("feedback");
+      let err: unknown;
+      try {
+        await this.runFeedbackCycle();
+      } catch (e) {
+        err = e;
+      }
+      this.loopFinish("feedback", start, err);
       if (this.running) {
         const timer = setTimeout(loop, interval);
         this.timers.push(timer);
