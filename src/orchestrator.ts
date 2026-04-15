@@ -1311,13 +1311,25 @@ export class Orchestrator {
       if (!this.running) return;
       const start = Date.now();
       this.loopStart("knowledge-lint");
-      console.log("[knowledge] running lint...");
+
+      // Guard: skip if no knowledge pages exist to lint
+      const entityDir = resolve(this.config.vaultPath, "knowledge/entities");
+      const topicDir = resolve(this.config.vaultPath, "knowledge/topics");
+      let pageCount = 0;
+      try { pageCount += (await readdir(entityDir)).filter((f) => f.endsWith(".md")).length; } catch {}
+      try { pageCount += (await readdir(topicDir)).filter((f) => f.endsWith(".md")).length; } catch {}
+
       let err: unknown;
-      try {
-        await spawn(this.config, "knowledge-lint", {});
-      } catch (e) {
-        err = e;
-        console.error("[knowledge] lint error:", e);
+      if (pageCount === 0) {
+        console.log("[knowledge] no pages to lint — skipping");
+      } else {
+        console.log(`[knowledge] linting ${pageCount} pages...`);
+        try {
+          await spawn(this.config, "knowledge-lint", {});
+        } catch (e) {
+          err = e;
+          console.error("[knowledge] lint error:", e);
+        }
       }
       this.loopFinish("knowledge-lint", start, err);
       if (this.running) {
@@ -1357,13 +1369,23 @@ export class Orchestrator {
       if (!this.running) return;
       const start = Date.now();
       this.loopStart("skill-organize");
-      console.log("[skills] running organize...");
+
+      // Guard: skip if no skills exist to organize
+      const treePath = resolve(this.config.vaultPath, "skills/_tree.md");
+      let hasSkills = false;
+      try { await stat(treePath); hasSkills = true; } catch { /* no tree yet */ }
+
       let err: unknown;
-      try {
-        await spawn(this.config, "skill-organize", {});
-      } catch (e) {
-        err = e;
-        console.error("[skills] organize error:", e);
+      if (!hasSkills) {
+        console.log("[skills] no skills to organize — skipping");
+      } else {
+        console.log("[skills] running organize...");
+        try {
+          await spawn(this.config, "skill-organize", {});
+        } catch (e) {
+          err = e;
+          console.error("[skills] organize error:", e);
+        }
       }
       this.loopFinish("skill-organize", start, err);
       if (this.running) {
@@ -1460,13 +1482,25 @@ export class Orchestrator {
       if (!this.running) return;
       const start = Date.now();
       this.loopStart("tool-review");
-      console.log("[tools] running periodic review...");
-      let err: unknown;
+
+      // Guard: skip if no tools exist to review
+      const toolsDir = resolve(this.config.vaultPath, "tools");
+      let toolFiles: string[] = [];
       try {
-        await spawn(this.config, "tool-review", {});
-      } catch (e) {
-        err = e;
-        console.error("[tools] review error:", e);
+        toolFiles = (await readdir(toolsDir)).filter((f) => f.endsWith(".md") && !f.startsWith("_"));
+      } catch { /* dir missing */ }
+
+      let err: unknown;
+      if (toolFiles.length === 0) {
+        console.log("[tools] no tools to review — skipping");
+      } else {
+        console.log(`[tools] reviewing ${toolFiles.length} tools...`);
+        try {
+          await spawn(this.config, "tool-review", {});
+        } catch (e) {
+          err = e;
+          console.error("[tools] review error:", e);
+        }
       }
       this.loopFinish("tool-review", start, err);
       if (this.running) {
