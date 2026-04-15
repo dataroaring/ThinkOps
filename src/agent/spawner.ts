@@ -3,7 +3,7 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { claudeCli } from "./claude-cli.js";
 import { opencodeCli } from "./opencode-cli.js";
-import type { AgentCLI, CLIResult, TimeoutOpts } from "./types.js";
+import type { AgentCLI, CLIResult, TimeoutOpts, ToolAction } from "./types.js";
 import type { Config } from "../config.js";
 import { appendRunLog } from "../utils/run-logger.js";
 

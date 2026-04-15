@@ -3,11 +3,20 @@ export interface TimeoutOpts {
   idleTimeMs?: number;  // no-activity kill (default 5min)
 }
 
+export interface ToolAction {
+  tool: string;
+  input: Record<string, unknown>;
+  /** Short summary of input for fingerprinting. */
+  summary: string;
+}
+
 export interface CLIResult {
   output: string;
   sessionId: string;
   cost?: number;
   turns?: number;
+  /** Structured tool calls the LLM made during this run. */
+  actions?: ToolAction[];
 }
 
 export interface AgentCLI {

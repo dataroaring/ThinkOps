@@ -9,6 +9,7 @@ import { spawn, resume } from "./agent/spawner.js";
 import { TelegramBot } from "./telegram/bot.js";
 import { watchFolder } from "./utils/file-watcher.js";
 import { startDashboard } from "./web/server.js";
+import { ActionTracker } from "./utils/action-tracker.js";
 
 interface ActiveAgent {
   connector: string;
@@ -146,8 +147,12 @@ export class Orchestrator {
   /** Background loop tracking for dashboard. */
   private loopStates = new Map<string, LoopState>();
 
+  /** Action tracker — learns from repeated LLM behavior. */
+  private actionTracker: ActionTracker;
+
   constructor(private config: Config) {
     this.bot = new TelegramBot(config);
+    this.actionTracker = new ActionTracker(config.vaultPath);
     this.registerCommands();
   }
 
@@ -617,15 +622,19 @@ export class Orchestrator {
     const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
     run.log(`audit: ${doneCount} tasks completed previously`);
 
-    // Run generated check tool if one exists — skip LLM entirely when 0 new tasks
-    const toolCheck = await this.runGeneratedCheckTool(name);
-    if (toolCheck === 0) {
-      run.log("check-tool: 0 new tasks — skipping LLM");
-      await this.appendAuditCheck(name);
-      this.totalNoTasks++;
-      return;
-    } else if (toolCheck !== null) {
-      run.log(`check-tool: ${toolCheck} potential new tasks — proceeding`);
+    // Run generated tool if one exists for this (connector, template) — skip LLM entirely
+    const toolResult = await this.runGeneratedTool(name, "connector-run");
+    if (toolResult) {
+      if (toolResult.outcome === "no-tasks") {
+        run.log(`gen-tool: ${toolResult.details ?? "no tasks"} — skipping LLM`);
+        await this.appendAuditCheck(name);
+        this.totalNoTasks++;
+        return;
+      } else if (toolResult.outcome === "needs-llm") {
+        run.log(`gen-tool: needs LLM — ${toolResult.details ?? "proceeding"}`);
+      } else {
+        run.log(`gen-tool: ${toolResult.outcome} — ${toolResult.details ?? ""}`);
+      }
     }
 
     // Extract code directory from connector context
@@ -646,15 +655,21 @@ export class Orchestrator {
       run.startPhase("preflight");
       this.setPhase(name, "preflight");
       this.emitEvent({ type: "log", connector: name, message: `Analyzing ${name}: reading state, past lessons (${doneCount} prior tasks)`, level: "info", timestamp: Date.now() });
+      const auditTail = tailLines(auditLog, 50);
       const preflight = await spawn(this.config, "task-preflight", {
         connector_content: content,
-        audit_log: auditLog || "(empty — no tasks completed yet)",
+        audit_log: auditTail || "(empty — no tasks completed yet)",
         past_findings: pastFindings || "(no past findings yet)",
       }, { cwd: taskCwd, label: `preflight: ${name}` });
 
       const preflightOutput = preflight.output;
       run.log(`pre-flight done (in: ${preflight.inputChars}c, out: ${preflightOutput.length}c)`);
       this.emitEvent({ type: "log", connector: name, message: `Pre-flight complete (in: ${fmtChars(preflight.inputChars)}, out: ${fmtChars(preflight.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: preflight.inputChars, outputChars: preflight.outputChars });
+
+      // Record preflight actions for pattern detection
+      if (preflight.actions?.length) {
+        this.recordAndLearn(name, "task-preflight", preflight.actions, preflightOutput, preflight.cost).catch(() => {});
+      }
 
       // Select relevant skills
       run.startPhase("skill-select");
@@ -669,9 +684,9 @@ export class Orchestrator {
       const result = await spawn(this.config, "connector-run", {
         connector_path: path,
         connector_content: content,
-        audit_log: auditLog || "(empty — no tasks completed yet)",
-        skill_context: skillContext,
-        preflight_analysis: preflightOutput,
+        audit_log: auditTail || "(empty — no tasks completed yet)",
+        skill_context: truncate(skillContext, 8000),
+        preflight_analysis: truncate(preflightOutput, 5000),
       }, { cwd: taskCwd, label: name });
       this.emitEvent({ type: "log", connector: name, message: `Execute done (in: ${fmtChars(result.inputChars)}, out: ${fmtChars(result.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: result.inputChars, outputChars: result.outputChars });
 
@@ -720,15 +735,17 @@ export class Orchestrator {
       this.rateLimitBackoff.delete(name);
 
       // Parse result
+      // Record actions for pattern detection (non-blocking)
+      if (current.actions?.length) {
+        this.recordAndLearn(name, "connector-run", current.actions, current.output, current.cost).catch((err) => {
+          console.warn(`[${name}] action recording failed (non-fatal):`, err instanceof Error ? err.message : err);
+        });
+      }
+
       if (current.output.includes("NO_TASKS_AVAILABLE")) {
         run.log("result: no new tasks");
         this.totalNoTasks++;
         await this.appendAuditCheck(name);
-
-        // Learn: generate a check tool so future polls can skip the LLM
-        this.maybeGenerateCheckTool(name, content, auditLog, current.output).catch((err) => {
-          console.warn(`[${name}] check tool generation failed (non-fatal):`, err instanceof Error ? err.message : err);
-        });
 
         console.log(run.summary("no tasks"));
       } else {
@@ -1283,13 +1300,21 @@ export class Orchestrator {
       }
 
       const skills: string[] = [];
+      let totalLen = 0;
+      const MAX_PER_SKILL = 1500;
+      const MAX_TOTAL_SKILLS = 8000;
       for (const p of paths.slice(0, 5)) {
+        if (totalLen >= MAX_TOTAL_SKILLS) break;
         try {
           const content = await readFile(
             resolve(this.config.vaultPath, p),
             "utf-8"
           );
-          skills.push(`--- Skill: ${p} ---\n${content}`);
+          const trimmed = content.length > MAX_PER_SKILL
+            ? content.slice(0, MAX_PER_SKILL) + "\n...(truncated)"
+            : content;
+          skills.push(`--- Skill: ${p} ---\n${trimmed}`);
+          totalLen += trimmed.length;
         } catch {
           // Skill file not found, skip
         }
@@ -1493,80 +1518,109 @@ export class Orchestrator {
     });
   }
 
-  // ── Generated Check Tools (learn to skip LLM) ─────────
-
-  private checkToolPath(connectorName: string): string {
-    return resolve(this.config.vaultPath, `tools/_check_${connectorName}.sh`);
-  }
+  // ── Generated Tools (learn from repeated patterns) ─────
 
   /**
-   * Run a previously-generated check tool for a connector.
-   * Returns: number (task count), or null if no tool / tool failed.
+   * Record actions from a completed spawn, detect repeats, and generate tools.
+   * This is the general "evolution" mechanism — ThinkOps observes its own behavior,
+   * detects when it keeps doing the same thing, and generates a script to replace it.
    */
-  private async runGeneratedCheckTool(connectorName: string): Promise<number | null> {
-    const toolPath = this.checkToolPath(connectorName);
-    try {
-      await stat(toolPath);
-    } catch {
-      return null; // No check tool yet — LLM hasn't learned this pattern
-    }
-
-    try {
-      const output = await this.execCheck(`bash "${toolPath}"`);
-      const count = parseInt(output.trim(), 10);
-      if (isNaN(count)) {
-        console.warn(`[${connectorName}] check tool returned non-numeric output: "${output.trim()}" — ignoring`);
-        return null; // Fall through to LLM
-      }
-      return count;
-    } catch (err) {
-      // Tool failed — fall through to LLM (maybe the tool is stale)
-      console.warn(`[${connectorName}] check tool failed — falling back to LLM:`, err instanceof Error ? err.message : err);
-      return null;
-    }
-  }
-
-  /**
-   * After a NO_TASKS_AVAILABLE result, ask the LLM to generate a check tool
-   * so future polls can skip the LLM entirely.
-   * Only generates once — if a tool already exists, skips.
-   */
-  private async maybeGenerateCheckTool(
-    connectorName: string,
-    connectorContent: string,
-    auditLog: string,
-    agentOutput: string,
+  private async recordAndLearn(
+    connector: string,
+    template: string,
+    actions: import("./agent/types.js").ToolAction[],
+    outcome: string,
+    cost?: number,
   ): Promise<void> {
-    const toolPath = this.checkToolPath(connectorName);
+    await this.actionTracker.record(template, connector, actions, outcome, cost);
 
-    // Don't regenerate if tool already exists
-    try {
-      await stat(toolPath);
-      return; // Already learned
-    } catch { /* doesn't exist yet — generate it */ }
+    const repeats = await this.actionTracker.detectRepeats(connector, template);
+    if (repeats.length === 0) return;
 
-    console.log(`[${connectorName}] learning: generating check tool to avoid future LLM calls...`);
-    try {
-      const result = await spawn(this.config, "tool-gen", {
-        connector_content: connectorContent,
-        audit_log_tail: auditLog.split("\n").slice(-30).join("\n"),
-        agent_summary: agentOutput.slice(0, 3000),
-        audit_path: resolve(this.config.vaultPath, `thinkops/audit/${connectorName}.md`),
-        connector_name: connectorName,
-      });
+    // Generate tools for the most costly repeated patterns
+    for (const pattern of repeats.slice(0, 1)) {
+      const toolPath = this.generatedToolPath(pattern.fingerprint);
+      try {
+        await stat(toolPath);
+        continue; // Already generated
+      } catch { /* generate it */ }
 
-      // Extract bash script from output
-      const scriptMatch = result.output.match(/```bash\n([\s\S]*?)```/);
-      if (!scriptMatch) {
-        console.warn(`[${connectorName}] tool-gen did not produce a valid script`);
-        return;
+      console.log(`[${connector}] evolution: pattern "${pattern.fingerprint}" repeated ${pattern.count}x (cost: $${pattern.totalCost.toFixed(4)}) — generating tool`);
+
+      try {
+        const connectorContent = await this.loadConnectorContent(connector);
+        const auditLog = await this.loadAuditLog(connector);
+
+        const result = await spawn(this.config, "tool-gen", {
+          template_name: template,
+          connector_name: connector,
+          repeat_count: String(pattern.count),
+          total_cost: pattern.totalCost.toFixed(4),
+          action_sequence: this.actionTracker.formatPatternForLLM(pattern),
+          typical_outcome: pattern.lastOutcome.slice(0, 2000),
+          connector_content: connectorContent,
+          audit_log_tail: auditLog.split("\n").slice(-30).join("\n"),
+          fingerprint: pattern.fingerprint,
+        });
+
+        const scriptMatch = result.output.match(/```bash\n([\s\S]*?)```/);
+        if (!scriptMatch) {
+          console.warn(`[${connector}] tool-gen: no valid script produced`);
+          continue;
+        }
+
+        await mkdir(resolve(this.config.vaultPath, "tools"), { recursive: true });
+        await writeFile(toolPath, scriptMatch[1], { mode: 0o755 });
+        console.log(`[${connector}] evolution: tool saved → ${toolPath}`);
+      } catch (err) {
+        console.error(`[${connector}] tool-gen failed:`, err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  /**
+   * Run a previously-generated tool for a (connector, template) pair.
+   * Returns parsed result or null if no tool exists / tool failed.
+   */
+  private async runGeneratedTool(
+    connector: string,
+    template: string,
+  ): Promise<{ outcome: string; details?: string; data?: Record<string, unknown> } | null> {
+    // Find any generated tool for this connector+template by checking action history
+    const repeats = await this.actionTracker.detectRepeats(connector, template);
+    for (const pattern of repeats) {
+      const toolPath = this.generatedToolPath(pattern.fingerprint);
+      try {
+        await stat(toolPath);
+      } catch {
+        continue; // No tool for this pattern
       }
 
-      const script = scriptMatch[1];
-      await writeFile(toolPath, script, { mode: 0o755 });
-      console.log(`[${connectorName}] check tool saved: ${toolPath}`);
-    } catch (err) {
-      console.error(`[${connectorName}] tool-gen failed:`, err);
+      try {
+        const output = await this.execCheck(`bash "${toolPath}"`);
+        const parsed = JSON.parse(output.trim());
+        if (parsed.outcome) {
+          console.log(`[${connector}] gen-tool ${pattern.fingerprint.slice(0, 8)}: ${parsed.outcome}`);
+          return parsed;
+        }
+      } catch (err) {
+        console.warn(`[${connector}] gen-tool ${pattern.fingerprint.slice(0, 8)} failed — falling back to LLM:`,
+          err instanceof Error ? err.message : err);
+      }
+    }
+    return null;
+  }
+
+  private generatedToolPath(fingerprint: string): string {
+    return resolve(this.config.vaultPath, `tools/_gen_${fingerprint}.sh`);
+  }
+
+  private async loadConnectorContent(name: string): Promise<string> {
+    const path = resolve(this.config.vaultPath, "connectors", `${name}.md`);
+    try {
+      return await readFile(path, "utf-8");
+    } catch {
+      return "";
     }
   }
 
@@ -1756,6 +1810,7 @@ export class Orchestrator {
       "tools/_archive",
       "thinkops",
       "thinkops/audit",
+      "thinkops/actions",
     ];
     for (const d of dirs) {
       await mkdir(resolve(this.config.vaultPath, d), { recursive: true });
@@ -1810,6 +1865,19 @@ const RATE_LIMIT_PATTERNS = [
 
 function isRateLimited(output: string): boolean {
   return RATE_LIMIT_PATTERNS.some((p) => p.test(output));
+}
+
+/** Keep the last N lines of a string. */
+function tailLines(text: string, n: number): string {
+  const lines = text.split("\n");
+  if (lines.length <= n) return text;
+  return `...(${lines.length - n} older entries omitted)\n` + lines.slice(-n).join("\n");
+}
+
+/** Hard-truncate a string to maxChars. */
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + "\n...(truncated)";
 }
 
 function extractKeyDetails(output: string): string {

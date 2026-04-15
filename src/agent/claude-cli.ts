@@ -1,5 +1,5 @@
 import { spawn as spawnProcess } from "child_process";
-import type { AgentCLI, CLIResult, TimeoutOpts } from "./types.js";
+import type { AgentCLI, CLIResult, TimeoutOpts, ToolAction } from "./types.js";
 
 const DEFAULTS: Required<TimeoutOpts> = {
   maxTimeMs: 2 * 60 * 60 * 1000,  // 2 hours
@@ -41,6 +41,7 @@ function run(args: string[], cwd?: string, timeoutOpts?: TimeoutOpts): Promise<C
     let cost: number | undefined;
     let turns: number | undefined;
     let buffer = "";
+    const actions: ToolAction[] = [];
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       lastActivity = Date.now();
@@ -75,6 +76,7 @@ function run(args: string[], cwd?: string, timeoutOpts?: TimeoutOpts): Promise<C
               const input = block.input as Record<string, unknown>;
               const detail = summarizeTool(name, input);
               console.log(`[claude]   🔧 ${name}${detail}`);
+              actions.push({ tool: name, input, summary: `${name}${detail}` });
             } else if (block.type === "text") {
               const text = (block.text as string).trim();
               if (text) lastResult = text;
@@ -114,7 +116,7 @@ function run(args: string[], cwd?: string, timeoutOpts?: TimeoutOpts): Promise<C
         return;
       }
 
-      resolve({ output: lastResult, sessionId, cost, turns });
+      resolve({ output: lastResult, sessionId, cost, turns, actions });
     });
 
     proc.on("error", (err) => {

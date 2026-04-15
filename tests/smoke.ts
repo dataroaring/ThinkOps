@@ -331,6 +331,44 @@ async function testVaultTemplates(): Promise<void> {
   assert(connectorExample.includes("- [ ]"), "Connector example has pending tasks");
 }
 
+// ── Test 7: Action tracker ──────────────────────────
+
+async function testActionTracker(): Promise<void> {
+  console.log("\n[Test] Action tracker");
+
+  const { ActionTracker } = await import("../src/utils/action-tracker.js");
+  const tracker = new ActionTracker(TEST_DIR);
+
+  const actions = [
+    { tool: "Read", input: { file_path: "/tmp/test.md" }, summary: "Read: /tmp/test.md" },
+    { tool: "Bash", input: { command: "git status" }, summary: "Bash: git status" },
+  ];
+
+  // Record the same pattern 4 times (above REPEAT_THRESHOLD of 3)
+  for (let i = 0; i < 4; i++) {
+    await tracker.record("connector-run", "test-connector", actions, "NO_TASKS_AVAILABLE", 0.05);
+  }
+
+  // Should detect as a repeat
+  const repeats = await tracker.detectRepeats("test-connector", "connector-run");
+  assert(repeats.length === 1, "Detects 1 repeated pattern");
+  assert(repeats[0].count === 4, "Pattern count is 4");
+  assert(repeats[0].fingerprint.length === 12, "Fingerprint is 12-char hex");
+  assert(repeats[0].totalCost === 0.2, "Total cost tracks correctly");
+
+  // Different actions should NOT match
+  await tracker.record("connector-run", "test-connector",
+    [{ tool: "Grep", input: { pattern: "foo" }, summary: "Grep: foo" }],
+    "TASK_COMPLETED\nid: 1\ntitle: test", 0.1);
+  const repeats2 = await tracker.detectRepeats("test-connector", "connector-run");
+  assert(repeats2.length === 1, "New action pattern doesn't meet threshold");
+
+  // formatPatternForLLM produces readable output
+  const formatted = tracker.formatPatternForLLM(repeats[0]);
+  assert(formatted.includes("test-connector"), "Format includes connector name");
+  assert(formatted.includes("4 times"), "Format includes repeat count");
+}
+
 // ── Run all tests ────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -345,6 +383,7 @@ async function main(): Promise<void> {
   await testConnectorScanning();
   await testAgentTypes();
   await testVaultTemplates();
+  await testActionTracker();
 
   // Cleanup
   await rm(TEST_DIR, { recursive: true, force: true });
