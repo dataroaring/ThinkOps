@@ -277,15 +277,17 @@ export class Orchestrator {
     if (s) { s.running = true; s.nextRunAt = null; }
   }
 
-  /** Record a loop run finishing. */
-  private loopFinish(name: string, startedAt: number, err?: unknown): void {
+  /** Record a loop run finishing. nextIntervalMs overrides the static intervalSecs. */
+  private loopFinish(name: string, startedAt: number, err?: unknown, nextIntervalMs?: number): void {
     const s = this.loopStates.get(name);
     if (!s) return;
     const now = Date.now();
     s.running = false;
     s.runCount++;
     s.lastRunAt = now;
-    s.nextRunAt = now + s.intervalSecs * 1000;
+    const intervalMs = nextIntervalMs ?? s.intervalSecs * 1000;
+    s.intervalSecs = Math.round(intervalMs / 1000);
+    s.nextRunAt = now + intervalMs;
     const run: LoopRun = {
       startedAt, finishedAt: now, durationMs: now - startedAt,
       outcome: err ? "error" : "ok",
@@ -393,7 +395,7 @@ export class Orchestrator {
     this.initLoop("feedback", this.config.feedbackCheckInterval);
 
     // Start task loops (parallel, one per connector)
-    console.log("[orchestrator] starting task loops (concurrency=%d, poll every %ds)...", this.config.taskConcurrency, this.config.taskPollInterval);
+    console.log("[orchestrator] starting task loops (concurrency=%d, adaptive poll %s–%s)...", this.config.taskConcurrency, formatDuration(this.POLL_MIN_MS), formatDuration(this.POLL_MAX_MS));
     this.startTaskLoop();
 
     // Start knowledge watcher
@@ -457,7 +459,7 @@ export class Orchestrator {
       "",
       `  Agent:       ${cfg.agentCli}/${cfg.agentModel}`,
       `  Concurrency: ${cfg.taskConcurrency} parallel agents`,
-      `  Poll:        every ${cfg.taskPollInterval}s`,
+      `  Poll:        adaptive 10m–1h (grows when idle, resets on activity)`,
       `  Dashboard:   http://localhost:${cfg.dashboardPort}`,
       "",
       `  Connectors (${connectors.length}):`,
@@ -482,7 +484,7 @@ export class Orchestrator {
     const teleLines = [
       `*${cfg.brandName} started*`,
       `Agent: ${cfg.agentCli}/${cfg.agentModel}`,
-      `Concurrency: ${cfg.taskConcurrency} | Poll: ${cfg.taskPollInterval}s`,
+      `Concurrency: ${cfg.taskConcurrency} | Poll: adaptive 10m–1h`,
       `Dashboard: http://localhost:${cfg.dashboardPort}`,
       "",
       `*Connectors (${connectors.length}):*`,
@@ -516,6 +518,11 @@ export class Orchestrator {
   private connectorPolls = new Map<string, number>();
   private connectorDoneCounts = new Map<string, number>();
 
+  /** Adaptive poll interval per connector (ms). Grows on idle, shrinks on activity. */
+  private connectorIntervals = new Map<string, number>();
+  private readonly POLL_MIN_MS = 10 * 60 * 1000;  // 10 minutes
+  private readonly POLL_MAX_MS = 60 * 60 * 1000;  // 1 hour
+
   private startTaskLoop(): void {
     // Discover connectors and start a loop for each; re-scan periodically for new ones
     const discover = async () => {
@@ -537,6 +544,10 @@ export class Orchestrator {
   }
 
   private startConnectorLoop(name: string, path: string): void {
+    // Initialize adaptive interval from config (clamped to bounds)
+    const initialMs = Math.max(this.POLL_MIN_MS, Math.min(this.config.taskPollInterval * 1000, this.POLL_MAX_MS));
+    this.connectorIntervals.set(name, initialMs);
+
     const poll = async () => {
       if (!this.running) return;
 
@@ -561,13 +572,27 @@ export class Orchestrator {
         err = e;
         console.error(`${ts()} [${name}] error:`, e);
       }
-      this.loopFinish("connectors", start, err);
+      const nextMs = this.connectorIntervals.get(name) ?? this.POLL_MIN_MS;
+      this.loopFinish("connectors", start, err, nextMs);
       if (this.running) {
-        const timer = safeTimeout(poll, this.config.taskPollInterval * 1000);
+        console.log(`${ts()} [${name}] next poll in ${formatDuration(nextMs)}`);
+        const timer = safeTimeout(poll, nextMs);
         this.timers.push(timer);
       }
     };
     poll();
+  }
+
+  /** Shrink interval after finding tasks (reset to minimum). */
+  private pollFaster(name: string): void {
+    this.connectorIntervals.set(name, this.POLL_MIN_MS);
+  }
+
+  /** Grow interval after finding no tasks (1.5x, capped at max). */
+  private pollSlower(name: string): void {
+    const current = this.connectorIntervals.get(name) ?? this.POLL_MIN_MS;
+    const next = Math.min(Math.round(current * 1.5), this.POLL_MAX_MS);
+    this.connectorIntervals.set(name, next);
   }
 
   private async acquireSlot(name: string): Promise<boolean> {
@@ -622,6 +647,7 @@ export class Orchestrator {
     const changed = await this.runCheapCheck(name, content);
     if (!changed) {
       run.log("check: no changes detected — skipping poll");
+      this.pollSlower(name);
       return;
     }
 
@@ -636,6 +662,7 @@ export class Orchestrator {
         run.log(`gen-tool: ${toolResult.details ?? "no tasks"} — skipping LLM`);
         await this.appendAuditCheck(name);
         this.totalNoTasks++;
+        this.pollSlower(name);
         return;
       } else if (toolResult.outcome === "needs-llm") {
         run.log(`gen-tool: needs LLM — ${toolResult.details ?? "proceeding"}`);
@@ -752,12 +779,14 @@ export class Orchestrator {
       if (current.output.includes("NO_TASKS_AVAILABLE")) {
         run.log("result: no new tasks");
         this.totalNoTasks++;
+        this.pollSlower(name);
         await this.appendAuditCheck(name);
 
         console.log(run.summary("no tasks"));
       } else {
         let completed = parseTaskCompleted(current.output);
         if (completed) {
+          this.pollFaster(name); // Found work — check again sooner
           run.taskId = completed.id;
           this.setPhase(name, "completed", completed.id, completed.title);
           run.log(`task done: ${completed.title}`);
@@ -940,6 +969,7 @@ export class Orchestrator {
 
           if (recovered && completed) {
             // Recovered task goes through the normal completion pipeline
+            this.pollFaster(name);
             run.taskId = completed.id;
             this.setPhase(name, "completed", completed.id, completed.title);
             run.log(`recovered task: ${completed.title}`);

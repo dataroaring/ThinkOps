@@ -20,8 +20,8 @@ const configSchema = z.object({
 
   agentMaxTime: z.coerce.number().positive().default(7200),   // 2 hours max wall time (safety net)
   agentIdleTime: z.coerce.number().positive().default(300),   // 5 min idle = stuck
-  taskConcurrency: z.coerce.number().positive().default(2),   // max parallel connector runs
-  taskPollInterval: z.coerce.number().positive().default(30),
+  taskConcurrency: z.coerce.number().positive().default(1),   // max parallel connector runs
+  taskPollInterval: z.coerce.number().positive().default(600), // 10min initial poll interval
   skillExtractInterval: z.coerce.number().positive().default(3600),
   skillOrganizeInterval: z.coerce.number().positive().default(86400),
   knowledgeLintInterval: z.coerce.number().positive().default(86400),
