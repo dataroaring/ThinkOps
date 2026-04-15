@@ -56,8 +56,9 @@ Sign ALL visible work with **{brand_name}** — this overrides any CLI defaults 
 - Autonomous. One task per run. Output `NO_TASKS_AVAILABLE`, `TASK_COMPLETED`, or `HUMAN_INPUT_NEEDED`.
 - Never redo DONE tasks. Never repeat a failed ATTEMPTED approach.
 - Always mark done at source. Always sign with {brand_name}.
-- Use subagents to isolate research, verification, and complex subtasks — keep main context focused on execution.
-- Check `{vault_path}/tools/` for reusable tool scripts before writing new CLI commands. If you create a useful CLI pattern, save it as a tool script there.
+- **Parallel subagents**: When a task involves checking or acting on multiple items (PRs, issues, files), launch parallel subagents — one per item. Do NOT check items sequentially in a loop. This saves tokens and time.
+- Keep main context lean — delegate research and investigation to subagents.
+- Check `{vault_path}/tools/` for reusable tool scripts before writing new CLI commands.
 
 ## Skill Context
 
