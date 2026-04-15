@@ -159,6 +159,10 @@ export const claudeCli: AgentCLI = {
       "--output-format", "stream-json", "--verbose",
       "--dangerously-skip-permissions",
     ];
+    if (opts?.bare) args.push("--bare");
+    if (opts?.addDirs) {
+      for (const dir of opts.addDirs) args.push("--add-dir", dir);
+    }
     if (opts?.model) args.push("--model", opts.model);
     return run(args, opts?.cwd, opts?.timeoutOpts);
   },

@@ -10,6 +10,16 @@ import { appendRunLog } from "../utils/run-logger.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = resolve(__dirname, "../../prompts");
 
+/** Templates that only operate on vault files — don't need Claude Code's full
+ *  system prompt, hooks, memory, LSP, or CLAUDE.md discovery. Using --bare
+ *  saves ~15-20K input tokens per spawn. */
+const BARE_TEMPLATES = new Set([
+  "tool-review", "tool-extract",
+  "skill-extract", "skill-organize", "skill-select",
+  "knowledge-lint", "knowledge-ingest", "knowledge-query",
+  "feedback-check", "feedback-learn",
+]);
+
 export interface SpawnResult extends CLIResult {
   template: string;
   humanInputNeeded?: string;
@@ -47,7 +57,7 @@ export async function spawn(
   config: Config,
   templateName: string,
   vars: Record<string, string>,
-  opts?: { cwd?: string; extraContext?: string; label?: string }
+  opts?: { cwd?: string; extraContext?: string; label?: string; addDirs?: string[] }
 ): Promise<SpawnResult> {
   const loaded = await loadTemplate(templateName, {
     vault_path: config.vaultPath,
@@ -64,15 +74,19 @@ export async function spawn(
 
   const inputChars = prompt.length;
   const varsChars = inputChars - loaded.templateChars;
+  const bare = BARE_TEMPLATES.has(templateName);
 
   const agent = getAgent(config);
   const label = opts?.label ? ` (${opts.label})` : "";
-  console.log(`[spawn] ${agent.name} running "${templateName}"${label} | input: ${fmtSize(inputChars)} (template: ${fmtSize(loaded.templateChars)}, context: ${fmtSize(varsChars)})`);
+  const mode = bare ? " [bare]" : "";
+  console.log(`[spawn] ${agent.name} running "${templateName}"${label}${mode} | input: ${fmtSize(inputChars)} (template: ${fmtSize(loaded.templateChars)}, context: ${fmtSize(varsChars)})`);
   const start = Date.now();
   const result = await agent.execute(prompt, {
     cwd: opts?.cwd ?? config.vaultPath,
     model: config.agentModel,
     timeoutOpts: configTimeout(config),
+    bare,
+    addDirs: opts?.addDirs,
   });
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   const outputChars = result.output.length;

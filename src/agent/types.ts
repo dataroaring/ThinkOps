@@ -14,7 +14,7 @@ export interface AgentCLI {
   name: string;
   execute(
     prompt: string,
-    opts?: { cwd?: string; model?: string; timeoutOpts?: TimeoutOpts }
+    opts?: { cwd?: string; model?: string; timeoutOpts?: TimeoutOpts; bare?: boolean; addDirs?: string[] }
   ): Promise<CLIResult>;
   resume(
     sessionId: string,
