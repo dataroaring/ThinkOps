@@ -3,284 +3,415 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{BRAND_NAME}} Dashboard</title>
+<title>{{BRAND_NAME}}</title>
 <style>
   :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-    --blue: #388bfd; --yellow: #d29922; --orange: #db6d28;
-    --green: #3fb950; --red: #f85149; --gray: #484f58;
+    --bg: #0a0e14; --surface: #12161e; --surface-raised: #1a1f2b;
+    --border: #262d3a; --border-subtle: #1e2430;
+    --text: #e8edf4; --text-secondary: #9ca3b0; --muted: #6b7280;
+    --accent: #3b82f6; --accent-hover: #2563eb; --accent-subtle: rgba(59,130,246,0.12);
+    --green: #22c55e; --green-subtle: rgba(34,197,94,0.12);
+    --yellow: #eab308; --yellow-subtle: rgba(234,179,8,0.12);
+    --orange: #f97316; --orange-subtle: rgba(249,115,22,0.12);
+    --red: #ef4444; --red-subtle: rgba(239,68,68,0.12);
+    --sidebar-w: 248px;
+    --header-h: 56px;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    background: var(--bg); color: var(--text); font-size: 14px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+    overflow: hidden; height: 100vh; }
 
-  /* Header */
-  .header { background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 12px 20px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
-  .header h1 { font-size: 18px; font-weight: 600; color: var(--accent); }
-  .stat { display: flex; flex-direction: column; align-items: center; }
-  .stat-value { font-size: 20px; font-weight: 700; }
-  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-  .gauge { width: 80px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
-  .gauge-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.5s; }
-  .config-info { font-size: 12px; color: var(--muted); margin-left: auto; }
+  /* ── Top bar ─────────────────────────────── */
+  .topbar { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 20px; gap: 20px; z-index: 50; }
+  .topbar-brand { display: flex; align-items: center; gap: 10px; width: calc(var(--sidebar-w) - 20px); flex-shrink: 0; }
+  .topbar-brand h1 { font-size: 16px; font-weight: 700; color: var(--text);
+    letter-spacing: -0.3px; white-space: nowrap; }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .conn-dot.connected { background: var(--green); box-shadow: 0 0 6px rgba(34,197,94,0.4); }
+  .conn-dot.disconnected { background: var(--red); }
+  .topbar-stats { display: flex; align-items: center; gap: 24px; flex: 1; }
+  .kpi { display: flex; align-items: baseline; gap: 6px; }
+  .kpi-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  .gauge-wrap { display: flex; align-items: center; gap: 8px; }
+  .gauge { width: 72px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .gauge-fill { height: 100%; border-radius: 3px; transition: width 0.4s, background 0.4s; }
+  .topbar-meta { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .hamburger { display: none; background: none; border: none; color: var(--text); font-size: 20px;
+    cursor: pointer; padding: 4px; }
 
-  /* Layout */
-  .content { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
-  @media (max-width: 900px) { .content { grid-template-columns: 1fr; } }
+  /* ── Sidebar ─────────────────────────────── */
+  .sidebar { position: fixed; top: var(--header-h); left: 0; bottom: 0; width: var(--sidebar-w);
+    background: var(--surface); border-right: 1px solid var(--border);
+    overflow-y: auto; z-index: 40; display: flex; flex-direction: column; }
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .nav-section { padding: 16px 12px 4px; }
+  .nav-section-label { font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.6px; padding: 0 8px; margin-bottom: 4px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 1px 0;
+    border-radius: 6px; cursor: pointer; color: var(--text-secondary); font-size: 13px;
+    font-weight: 500; transition: background 0.15s, color 0.15s; user-select: none; }
+  .nav-item:hover { background: var(--accent-subtle); color: var(--text); }
+  .nav-item.active { background: var(--accent-subtle); color: var(--accent); }
+  .nav-icon { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+  .nav-item.active .nav-icon { opacity: 1; }
+  .nav-badge { margin-left: auto; font-size: 11px; font-weight: 600; padding: 1px 7px;
+    border-radius: 10px; background: var(--border); color: var(--text-secondary);
+    font-variant-numeric: tabular-nums; }
+  .nav-item.active .nav-badge { background: var(--accent-subtle); color: var(--accent); }
+  .sidebar-footer { margin-top: auto; padding: 12px; border-top: 1px solid var(--border); }
+  .sidebar-footer-text { font-size: 11px; color: var(--muted); text-align: center; }
 
-  /* Cards */
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-  .card-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.5px; margin-bottom: 12px; }
-  .card-full { grid-column: 1 / -1; }
+  /* ── Main ─────────────────────────────────── */
+  .main { position: fixed; top: var(--header-h); left: var(--sidebar-w); right: 0; bottom: 0;
+    overflow-y: auto; background: var(--bg); }
+  .main::-webkit-scrollbar { width: 6px; }
+  .main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .page { display: none; padding: 24px; max-width: 1200px; }
+  .page.active { display: block; }
+  .page-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; letter-spacing: -0.3px; }
+  .page-desc { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
 
-  /* Pipeline visualization */
-  .pipeline { display: flex; align-items: center; gap: 0; flex-wrap: wrap; justify-content: center; }
-  .pipeline-step { display: flex; flex-direction: column; align-items: center; padding: 8px 14px;
-    border-radius: 8px; border: 1px solid var(--border); min-width: 100px; }
-  .pipeline-step.active { border-color: var(--accent); box-shadow: 0 0 8px rgba(88,166,255,0.2); }
-  .pipeline-icon { font-size: 18px; margin-bottom: 4px; }
+  /* ── Cards ────────────────────────────────── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 16px; }
+  .card-header { font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 12px; }
+
+  /* ── Pipeline ─────────────────────────────── */
+  .pipeline { display: flex; align-items: center; gap: 0; justify-content: center; flex-wrap: wrap;
+    padding: 8px 0; }
+  .pipeline-step { display: flex; flex-direction: column; align-items: center; padding: 10px 16px;
+    border-radius: 8px; border: 1px solid var(--border); min-width: 110px; transition: all 0.3s; }
+  .pipeline-step.active { border-color: var(--accent); box-shadow: 0 0 12px rgba(59,130,246,0.15); }
+  .pipeline-icon { font-size: 20px; margin-bottom: 4px; }
   .pipeline-name { font-size: 12px; font-weight: 600; }
-  .pipeline-desc { font-size: 10px; color: var(--muted); text-align: center; max-width: 100px; }
-  .pipeline-arrow { color: var(--muted); font-size: 16px; padding: 0 4px; flex-shrink: 0; }
-  .pipeline-step-preflight .pipeline-icon { color: var(--blue); }
+  .pipeline-desc { font-size: 10px; color: var(--muted); text-align: center; max-width: 100px; margin-top: 2px; }
+  .pipeline-arrow { color: var(--border); font-size: 18px; padding: 0 6px; flex-shrink: 0; }
+  .pipeline-count { font-size: 18px; font-weight: 700; color: var(--accent); margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+  .pipeline-step-preflight .pipeline-icon { color: var(--accent); }
   .pipeline-step-execute .pipeline-icon { color: var(--yellow); }
   .pipeline-step-critic .pipeline-icon { color: var(--orange); }
   .pipeline-step-eval .pipeline-icon { color: var(--green); }
-  .pipeline-count { font-size: 16px; font-weight: 700; color: var(--accent); margin-top: 2px; }
 
-  /* Active agents table */
-  .agents-table { width: 100%; border-collapse: collapse; }
-  .agents-table th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase;
-    padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  .agents-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  .agents-table tr:last-child td { border-bottom: none; }
-  .empty-state { color: var(--muted); font-style: italic; padding: 12px 0; text-align: center; }
+  /* ── Table ────────────────────────────────── */
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.4px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top;
+    font-size: 13px; }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .empty-row { color: var(--muted); font-style: italic; text-align: center; padding: 24px 0; }
 
-  /* Phase badges */
-  .phase { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-  .phase-preflight { background: rgba(56,139,253,0.15); color: var(--blue); }
-  .phase-skill-select { background: rgba(56,139,253,0.15); color: var(--blue); }
-  .phase-execute { background: rgba(210,153,34,0.15); color: var(--yellow); }
-  .phase-critic { background: rgba(219,109,40,0.15); color: var(--orange); }
-  .phase-fix-pass { background: rgba(219,109,40,0.15); color: var(--orange); }
-  .phase-eval { background: rgba(63,185,80,0.15); color: var(--green); }
-  .phase-completed { background: rgba(63,185,80,0.15); color: var(--green); }
-  .phase-recover { background: rgba(248,81,73,0.15); color: var(--red); }
-  .phase-retry { background: rgba(210,153,34,0.15); color: var(--yellow); }
-  .phase-human-input { background: rgba(248,81,73,0.15); color: var(--red); }
-  .phase-rate-limited { background: rgba(248,81,73,0.15); color: var(--red); }
-  .phase-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
+  /* ── Phase badge ──────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 12px;
+    font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .badge-blue { background: var(--accent-subtle); color: var(--accent); }
+  .badge-yellow { background: var(--yellow-subtle); color: var(--yellow); }
+  .badge-orange { background: var(--orange-subtle); color: var(--orange); }
+  .badge-green { background: var(--green-subtle); color: var(--green); }
+  .badge-red { background: var(--red-subtle); color: var(--red); }
+  .badge-gray { background: rgba(107,114,128,0.12); color: var(--muted); }
   .phase-hint { font-size: 11px; color: var(--muted); display: block; margin-top: 2px; }
-
-  /* Task info */
-  .task-id { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; }
+  .mono { font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px; }
   .task-title { font-size: 12px; color: var(--muted); display: block; margin-top: 1px; }
 
-  /* Connector cards */
-  .connectors-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-  .connector-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
-  .connector-name { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
-  .connector-stat { font-size: 12px; color: var(--muted); }
+  /* ── Connectors ──────────────────────────── */
+  .connectors-list { display: flex; flex-direction: column; gap: 8px; }
+  .connector-row { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; display: flex; align-items: center; gap: 16px; cursor: pointer;
+    transition: border-color 0.15s; }
+  .connector-row:hover { border-color: var(--accent); }
+  .connector-icon { width: 36px; height: 36px; border-radius: 8px; background: var(--accent-subtle);
+    display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .connector-info { flex: 1; min-width: 0; }
+  .connector-info-name { font-weight: 600; font-size: 14px; }
+  .connector-info-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .connector-stats { display: flex; gap: 16px; flex-shrink: 0; }
+  .connector-stat-item { text-align: center; }
+  .connector-stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .connector-stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
 
-  /* Log feed */
-  .log-feed { max-height: 400px; overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; }
-  .log-entry { padding: 3px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
-  .log-entry:last-child { border-bottom: none; }
-  .log-time { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
-  .log-connector { color: var(--accent); white-space: nowrap; flex-shrink: 0; min-width: 80px; }
-  .log-msg { word-break: break-word; }
-  .log-warn { color: var(--yellow); }
-  .log-error { color: var(--red); }
+  /* ── Items grid (tools / skills) ─────────── */
+  .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .item-card { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+  .item-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(59,130,246,0.08); }
+  .item-name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .item-path { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace; }
+  .item-preview { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .item-count { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
 
-  /* Filter */
-  .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
-  .filter-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--border);
-    border-radius: 4px; padding: 4px 8px; font-size: 12px; }
-  .filter-bar label { font-size: 12px; color: var(--muted); }
-
-  /* Completions */
-  .completions-list { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
-  .completion-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
-  .completion-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  /* ── Completions ─────────────────────────── */
+  .completions-list { display: flex; flex-direction: column; gap: 10px; max-height: 500px; overflow-y: auto; }
+  .completion-card { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; }
+  .completion-header { display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 6px; gap: 12px; }
   .completion-title { font-weight: 600; font-size: 14px; }
-  .completion-tag { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace; }
-  .completion-result { font-size: 13px; color: var(--text); margin-bottom: 6px; }
+  .completion-tag { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace;
+    white-space: nowrap; }
+  .completion-result { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
   .completion-meta { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
-  .completion-meta span { white-space: nowrap; }
-  .quality-badge { font-weight: 600; }
-  .quality-high { color: var(--green); }
-  .quality-mid { color: var(--yellow); }
-  .quality-low { color: var(--red); }
+  .quality-high { color: var(--green); font-weight: 600; }
+  .quality-mid { color: var(--yellow); font-weight: 600; }
+  .quality-low { color: var(--red); font-weight: 600; }
 
-  /* Connection indicator */
-  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-  .conn-dot.connected { background: var(--green); }
-  .conn-dot.disconnected { background: var(--red); }
-
-  /* Loop stats */
-  .loops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-  .loop-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
-  .loop-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  /* ── Loops ────────────────────────────────── */
+  .loops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .loop-card { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; }
+  .loop-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .loop-name { font-weight: 600; font-size: 14px; }
-  .loop-status { font-size: 12px; padding: 2px 8px; border-radius: 12px; }
-  .loop-status-idle { background: rgba(72,79,88,0.15); color: var(--gray); }
-  .loop-status-running { background: rgba(56,139,253,0.15); color: var(--blue); }
-  .loop-meta { font-size: 12px; color: var(--muted); line-height: 1.6; }
-  .loop-history { margin-top: 8px; }
-  .loop-history-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; }
+  .loop-meta { font-size: 12px; color: var(--muted); line-height: 1.8; }
+  .loop-meta-row { display: flex; justify-content: space-between; }
+  .loop-meta-label { color: var(--muted); }
+  .loop-meta-value { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .loop-history { margin-top: 10px; }
+  .loop-history-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none;
+    border: none; padding: 0; font-family: inherit; }
   .loop-history-toggle:hover { text-decoration: underline; }
-  .loop-history-list { margin-top: 6px; font-size: 11px; font-family: 'SF Mono', Monaco, Consolas, monospace; max-height: 150px; overflow-y: auto; }
-  .loop-run { padding: 2px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+  .loop-history-list { margin-top: 8px; font-size: 11px; font-family: 'SF Mono', Monaco, Consolas, monospace;
+    max-height: 160px; overflow-y: auto; }
+  .loop-run { padding: 3px 0; border-bottom: 1px solid var(--border-subtle); display: flex; gap: 10px;
+    align-items: center; }
   .loop-run:last-child { border-bottom: none; }
   .loop-run-ok { color: var(--green); }
   .loop-run-error { color: var(--red); }
 
-  /* Tools & Skills */
-  .items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
-  .item-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer; transition: border-color 0.2s; }
-  .item-card:hover { border-color: var(--accent); }
-  .item-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
-  .item-path { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, Consolas, monospace; }
-  .item-preview { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  /* ── Log feed ────────────────────────────── */
+  .log-controls { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+  .log-controls select { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 12px; font-family: inherit; }
+  .log-controls label { font-size: 12px; color: var(--muted); }
+  .log-feed { max-height: calc(100vh - 260px); overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 12px; }
+  .log-entry { padding: 4px 0; border-bottom: 1px solid var(--border-subtle); display: flex; gap: 10px; }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+  .log-connector { color: var(--accent); white-space: nowrap; flex-shrink: 0; min-width: 80px; }
+  .log-msg { word-break: break-word; color: var(--text-secondary); }
+  .log-warn { color: var(--yellow); }
+  .log-error { color: var(--red); }
 
-  /* Modal */
-  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; justify-content: center; align-items: center; }
+  /* ── Modal ────────────────────────────────── */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 200;
+    justify-content: center; align-items: center; }
   .modal-overlay.active { display: flex; }
-  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 90%; max-width: 700px; max-height: 80vh; display: flex; flex-direction: column; }
-  .modal-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    width: 90%; max-width: 720px; max-height: 80vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; }
   .modal-header h2 { font-size: 16px; font-weight: 600; }
-  .modal-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
-  .modal-close:hover { color: var(--text); }
-  .modal-body { padding: 16px; overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; white-space: pre-wrap; line-height: 1.5; }
+  .modal-close { background: none; border: none; color: var(--muted); font-size: 22px;
+    cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+  .modal-close:hover { color: var(--text); background: var(--border); }
+  .modal-body { padding: 20px; overflow-y: auto; font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 13px; white-space: pre-wrap; line-height: 1.6; color: var(--text-secondary); }
 
-  /* Tabs */
-  .tab-bar { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
-  .tab-btn { background: none; border: none; color: var(--muted); padding: 8px 16px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tab-content { display: none; }
-  .tab-content.active { display: block; }
+  /* ── Responsive ──────────────────────────── */
+  @media (max-width: 768px) {
+    .hamburger { display: block; }
+    .topbar-brand { width: auto; }
+    .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+    .sidebar.open { transform: translateX(0); }
+    .main { left: 0; }
+    .topbar-stats { display: none; }
+    .page { padding: 16px; }
+  }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <h1><span class="conn-dot disconnected" id="connDot"></span>{{BRAND_NAME}}</h1>
-  <div class="stat"><span class="stat-value" id="uptime">--</span><span class="stat-label">Uptime</span></div>
-  <div class="stat"><span class="stat-value" id="completed">0</span><span class="stat-label">Completed</span></div>
-  <div class="stat">
-    <span class="stat-value"><span id="activeCount">0</span>/<span id="maxAgents">0</span></span>
-    <span class="stat-label">Agents</span>
+<!-- Top bar -->
+<div class="topbar">
+  <button class="hamburger" id="hamburger" aria-label="Menu">&#9776;</button>
+  <div class="topbar-brand">
+    <span class="conn-dot disconnected" id="connDot"></span>
+    <h1>{{BRAND_NAME}}</h1>
   </div>
-  <div class="stat">
-    <div class="gauge"><div class="gauge-fill" id="gaugeBar" style="width:0%"></div></div>
-    <span class="stat-label">Concurrency</span>
+  <div class="topbar-stats">
+    <div class="kpi"><span class="kpi-value" id="uptime">--</span><span class="kpi-label">Uptime</span></div>
+    <div class="kpi"><span class="kpi-value" id="completed">0</span><span class="kpi-label">Completed</span></div>
+    <div class="kpi">
+      <span class="kpi-value"><span id="activeCount">0</span>/<span id="maxAgents">0</span></span>
+      <span class="kpi-label">Agents</span>
+    </div>
+    <div class="gauge-wrap">
+      <div class="gauge"><div class="gauge-fill" id="gaugeBar" style="width:0%"></div></div>
+    </div>
   </div>
-  <div class="config-info" id="configInfo"></div>
+  <div class="topbar-meta" id="configInfo"></div>
 </div>
 
-<div class="content">
-  <!-- Pipeline Overview -->
-  <div class="card card-full">
-    <div class="card-title">Execution Pipeline &mdash; each task flows through these stages</div>
-    <div class="pipeline" id="pipeline">
-      <div class="pipeline-step pipeline-step-preflight" data-phase="preflight">
-        <span class="pipeline-icon">&#x1F50D;</span>
-        <span class="pipeline-name">Preflight</span>
-        <span class="pipeline-desc">Analyze state, past lessons, plan approach</span>
-        <span class="pipeline-count" id="count-preflight">0</span>
+<!-- Sidebar -->
+<nav class="sidebar" id="sidebar">
+  <div class="nav-section">
+    <div class="nav-section-label">Overview</div>
+    <div class="nav-item active" data-page="overview">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">Resources</div>
+    <div class="nav-item" data-page="connectors">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Connectors
+      <span class="nav-badge" id="navConnCount">0</span>
+    </div>
+    <div class="nav-item" data-page="tools">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+      Tools
+      <span class="nav-badge" id="navToolCount">0</span>
+    </div>
+    <div class="nav-item" data-page="skills">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+      Skills
+      <span class="nav-badge" id="navSkillCount">0</span>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-label">System</div>
+    <div class="nav-item" data-page="loops">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      Loops
+      <span class="nav-badge" id="navLoopCount">0</span>
+    </div>
+    <div class="nav-item" data-page="logs">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Activity Log
+    </div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-footer-text">{{BRAND_NAME}}</div>
+  </div>
+</nav>
+
+<!-- Main content -->
+<div class="main" id="mainContent">
+
+  <!-- ═══ Overview page ═══ -->
+  <div class="page active" id="page-overview">
+    <div class="page-title">Dashboard</div>
+    <div class="page-desc">Real-time overview of agent activity and task execution.</div>
+
+    <div class="card">
+      <div class="card-header">Execution Pipeline</div>
+      <div class="pipeline" id="pipeline">
+        <div class="pipeline-step pipeline-step-preflight" data-phase="preflight">
+          <span class="pipeline-icon">&#x1F50D;</span>
+          <span class="pipeline-name">Preflight</span>
+          <span class="pipeline-desc">Analyze state, plan approach</span>
+          <span class="pipeline-count" id="count-preflight">0</span>
+        </div>
+        <span class="pipeline-arrow">&#x2192;</span>
+        <div class="pipeline-step pipeline-step-execute" data-phase="execute">
+          <span class="pipeline-icon">&#x2692;</span>
+          <span class="pipeline-name">Execute</span>
+          <span class="pipeline-desc">Fetch task, code, verify</span>
+          <span class="pipeline-count" id="count-execute">0</span>
+        </div>
+        <span class="pipeline-arrow">&#x2192;</span>
+        <div class="pipeline-step pipeline-step-critic" data-phase="critic">
+          <span class="pipeline-icon">&#x1F9D0;</span>
+          <span class="pipeline-name">Critic</span>
+          <span class="pipeline-desc">Challenge result</span>
+          <span class="pipeline-count" id="count-critic">0</span>
+        </div>
+        <span class="pipeline-arrow">&#x2192;</span>
+        <div class="pipeline-step pipeline-step-eval" data-phase="eval">
+          <span class="pipeline-icon">&#x2705;</span>
+          <span class="pipeline-name">Eval</span>
+          <span class="pipeline-desc">Score quality, learn</span>
+          <span class="pipeline-count" id="count-eval">0</span>
+        </div>
       </div>
-      <span class="pipeline-arrow">&#x2192;</span>
-      <div class="pipeline-step pipeline-step-execute" data-phase="execute">
-        <span class="pipeline-icon">&#x2692;</span>
-        <span class="pipeline-name">Execute</span>
-        <span class="pipeline-desc">Fetch task, think, code, verify result</span>
-        <span class="pipeline-count" id="count-execute">0</span>
-      </div>
-      <span class="pipeline-arrow">&#x2192;</span>
-      <div class="pipeline-step pipeline-step-critic" data-phase="critic">
-        <span class="pipeline-icon">&#x1F9D0;</span>
-        <span class="pipeline-name">Critic</span>
-        <span class="pipeline-desc">Challenge result, find missed issues</span>
-        <span class="pipeline-count" id="count-critic">0</span>
-      </div>
-      <span class="pipeline-arrow">&#x2192;</span>
-      <div class="pipeline-step pipeline-step-eval" data-phase="eval">
-        <span class="pipeline-icon">&#x2705;</span>
-        <span class="pipeline-name">Eval</span>
-        <span class="pipeline-desc">Score quality, extract skills, route findings</span>
-        <span class="pipeline-count" id="count-eval">0</span>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Active Agents</div>
+      <table class="data-table">
+        <thead><tr><th>Connector</th><th>Phase</th><th>Task</th><th>Elapsed</th></tr></thead>
+        <tbody id="agentsBody">
+          <tr><td colspan="4" class="empty-row">No active agents &mdash; waiting for next poll</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Recent Completions</div>
+      <div id="completionsList" class="completions-list">
+        <div class="empty-row">No completed tasks yet</div>
       </div>
     </div>
   </div>
 
-  <!-- Active Agents -->
-  <div class="card card-full">
-    <div class="card-title">Active Agents &mdash; what each agent is doing right now</div>
-    <table class="agents-table">
-      <thead><tr><th>Connector</th><th>Phase</th><th>Task</th><th>Time</th></tr></thead>
-      <tbody id="agentsBody"><tr><td colspan="4" class="empty-state">No active agents &mdash; waiting for next poll</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- Recent Completions -->
-  <div class="card card-full">
-    <div class="card-title">Recent Completions &mdash; what {{BRAND_NAME}} did</div>
-    <div id="completionsList" class="completions-list">
-      <div class="empty-state">No completed tasks yet</div>
+  <!-- ═══ Connectors page ═══ -->
+  <div class="page" id="page-connectors">
+    <div class="page-title">Connectors</div>
+    <div class="page-desc">Task sources that feed work into the pipeline. Each connector polls an external system for new tasks.</div>
+    <div class="connectors-list" id="connectorsListPage">
+      <div class="empty-row">No connectors found</div>
     </div>
   </div>
 
-  <!-- Background Loops -->
-  <div class="card card-full">
-    <div class="card-title">Background Loops &mdash; periodic tasks and their history</div>
+  <!-- ═══ Tools page ═══ -->
+  <div class="page" id="page-tools">
+    <div class="page-title">Tools</div>
+    <div class="page-desc">CLI tools and commands discovered and cataloged during task execution.</div>
+    <div class="item-count" id="toolCount"></div>
+    <div class="items-grid" id="toolsGrid">
+      <div class="empty-row">No tools discovered yet</div>
+    </div>
+  </div>
+
+  <!-- ═══ Skills page ═══ -->
+  <div class="page" id="page-skills">
+    <div class="page-title">Skills</div>
+    <div class="page-desc">Reusable techniques and patterns extracted from completed tasks, organized by domain.</div>
+    <div class="item-count" id="skillCount"></div>
+    <div class="items-grid" id="skillsGrid">
+      <div class="empty-row">No skills learned yet</div>
+    </div>
+  </div>
+
+  <!-- ═══ Loops page ═══ -->
+  <div class="page" id="page-loops">
+    <div class="page-title">Background Loops</div>
+    <div class="page-desc">Periodic tasks that run on a schedule. Each loop manages a specific aspect of the system.</div>
     <div class="loops-grid" id="loopsGrid">
-      <div class="empty-state">Loading loops...</div>
+      <div class="empty-row">Loading loops...</div>
     </div>
   </div>
 
-  <!-- Tools & Skills -->
-  <div class="card card-full">
-    <div class="card-title">Tools &amp; Skills &mdash; learned knowledge (click to view)</div>
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="tools-tab">Tools</button>
-      <button class="tab-btn" data-tab="skills-tab">Skills</button>
-    </div>
-    <div id="tools-tab" class="tab-content active">
-      <div class="items-grid" id="toolsGrid">
-        <div class="empty-state">No tools yet</div>
+  <!-- ═══ Logs page ═══ -->
+  <div class="page" id="page-logs">
+    <div class="page-title">Activity Log</div>
+    <div class="page-desc">Real-time event stream from all connectors and system processes.</div>
+    <div class="card">
+      <div class="log-controls">
+        <label>Filter by connector:</label>
+        <select id="logFilter"><option value="">All</option></select>
       </div>
+      <div class="log-feed" id="logFeed"></div>
     </div>
-    <div id="skills-tab" class="tab-content">
-      <div class="items-grid" id="skillsGrid">
-        <div class="empty-state">No skills yet</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Connectors -->
-  <div class="card">
-    <div class="card-title">Connectors &mdash; task sources</div>
-    <div class="connectors-grid" id="connectorsGrid">
-      <div class="empty-state">No connectors found</div>
-    </div>
-  </div>
-
-  <!-- Live Log Feed -->
-  <div class="card">
-    <div class="card-title">Live Log</div>
-    <div class="filter-bar">
-      <label>Filter:</label>
-      <select id="logFilter"><option value="">All connectors</option></select>
-    </div>
-    <div class="log-feed" id="logFeed"></div>
   </div>
 </div>
 
-<!-- Content viewer modal -->
+<!-- Modal -->
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
     <div class="modal-header">
@@ -293,58 +424,58 @@
 
 <script>
 (function() {
-  var MAX_LOG_ENTRIES = 200;
-  var MAX_COMPLETIONS = 20;
-  var logs = [];
-  var completions = [];
-  var currentFilter = "";
-  var connectorSet = new Set();
+  // ── State ──────────────────────────────────
+  var MAX_LOG = 200, MAX_COMPLETIONS = 20;
+  var logs = [], completions = [], currentFilter = "", connectorSet = new Set();
 
-  // Phase descriptions for the agent table
   var PHASE_HINTS = {
     "preflight": "Reading state, past mistakes, planning approach",
     "skill-select": "Choosing relevant skills for this task",
     "execute": "Running the task: fetching, coding, testing",
-    "execute (resumed)": "Resumed after human input, continuing execution",
+    "execute (resumed)": "Resumed after human input",
     "critic": "Another agent is challenging the result",
     "fix-pass": "Fixing issues found by the critic",
     "eval": "Scoring quality and extracting lessons",
     "completed": "Task finished, awaiting eval",
     "human-input": "Waiting for your reply in Telegram",
     "recover": "LLM analyzing failure, deciding next step",
-    "retry": "Retrying with a different approach based on LLM analysis",
+    "retry": "Retrying with a different approach",
     "execute (recovered)": "Resumed after human input on failure",
     "rate-limited": "API rate limit hit, backing off"
   };
 
-  // --- Helpers ---
+  // ── Helpers ────────────────────────────────
   function fmtDuration(ms) {
     var s = Math.floor(ms / 1000);
     if (s < 60) return s + "s";
     var m = Math.floor(s / 60), rs = s % 60;
-    if (m < 60) return m + "m" + rs + "s";
+    if (m < 60) return m + "m " + rs + "s";
     var h = Math.floor(m / 60), rm = m % 60;
-    return h + "h" + rm + "m";
+    return h + "h " + rm + "m";
+  }
+  function fmtTime(ts) { return new Date(ts).toISOString().slice(11, 19); }
+  function fmtInterval(secs) {
+    if (secs < 60) return secs + "s";
+    if (secs < 3600) return Math.round(secs / 60) + " min";
+    if (secs < 86400) return Math.round(secs / 3600) + " hr";
+    return Math.round(secs / 86400) + " day";
+  }
+  function fmtAgo(ts) {
+    var d = Date.now() - ts;
+    if (d < 0) return "in " + fmtDuration(-d);
+    if (d < 1000) return "just now";
+    return fmtDuration(d) + " ago";
   }
 
-  function fmtTime(ts) {
-    return new Date(ts).toISOString().slice(11, 19);
+  function badgeClass(phase) {
+    var p = (phase || "").toLowerCase();
+    if (p.indexOf("preflight") >= 0 || p.indexOf("skill") >= 0) return "badge-blue";
+    if (p.indexOf("execute") >= 0 || p.indexOf("retry") >= 0) return "badge-yellow";
+    if (p.indexOf("critic") >= 0 || p.indexOf("fix") >= 0) return "badge-orange";
+    if (p.indexOf("eval") >= 0 || p.indexOf("completed") >= 0) return "badge-green";
+    if (p.indexOf("human") >= 0 || p.indexOf("rate") >= 0 || p.indexOf("recover") >= 0) return "badge-red";
+    return "badge-gray";
   }
-
-  function phaseClass(phase) {
-    var p = (phase || "idle").toLowerCase().replace(/[^a-z-]/g, "").replace(/\s+/g, "-");
-    var map = {
-      "preflight": "preflight", "skill-select": "skill-select",
-      "execute": "execute", "executeresumed": "execute",
-      "critic": "critic", "fix-pass": "fix-pass",
-      "eval": "eval", "completed": "completed",
-      "recover": "recover", "retry": "retry",
-      "human-input": "human-input", "rate-limited": "rate-limited"
-    };
-    return "phase-" + (map[p] || "idle");
-  }
-
-  // Map phase to pipeline bucket for counting
   function phaseBucket(phase) {
     var p = (phase || "").toLowerCase();
     if (p.indexOf("preflight") >= 0 || p.indexOf("skill-select") >= 0) return "preflight";
@@ -353,23 +484,33 @@
     if (p.indexOf("eval") >= 0) return "eval";
     return null;
   }
-
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text != null) e.textContent = text;
     return e;
   }
+  function clearChildren(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+  function fetchJSON(url, cb) { fetch(url).then(function(r) { return r.json(); }).then(cb).catch(function() {}); }
 
-  function clearChildren(node) {
-    while (node.firstChild) node.removeChild(node.firstChild);
-  }
+  // ── Navigation ─────────────────────────────
+  var navItems = document.querySelectorAll(".nav-item[data-page]");
+  navItems.forEach(function(item) {
+    item.addEventListener("click", function() {
+      navItems.forEach(function(n) { n.classList.remove("active"); });
+      item.classList.add("active");
+      document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
+      var page = document.getElementById("page-" + item.getAttribute("data-page"));
+      if (page) page.classList.add("active");
+      // Close mobile sidebar
+      document.getElementById("sidebar").classList.remove("open");
+    });
+  });
+  document.getElementById("hamburger").addEventListener("click", function() {
+    document.getElementById("sidebar").classList.toggle("open");
+  });
 
-  // --- Data fetching ---
-  function fetchJSON(url, cb) {
-    fetch(url).then(function(r) { return r.json(); }).then(cb).catch(function() {});
-  }
-
+  // ── Status ─────────────────────────────────
   function refreshStatus() {
     fetchJSON("/api/status", function(s) {
       document.getElementById("uptime").textContent = s.uptime > 0 ? fmtDuration(s.uptime) : "--";
@@ -384,12 +525,14 @@
     });
   }
 
+  // ── Agents ─────────────────────────────────
   function refreshAgents() {
     fetchJSON("/api/agents", function(agents) {
       var tbody = document.getElementById("agentsBody");
       clearChildren(tbody);
       if (!agents || agents.length === 0) {
-        var tr = el("tr"); var td = el("td", "empty-state", "No active agents \u2014 waiting for next poll");
+        var tr = el("tr");
+        var td = el("td", "empty-row", "No active agents \u2014 waiting for next poll");
         td.setAttribute("colspan", "4"); tr.appendChild(td); tbody.appendChild(tr);
         updatePipelineCounts([]);
         return;
@@ -397,36 +540,24 @@
       var now = Date.now();
       agents.forEach(function(a) {
         var tr = el("tr");
-
-        // Connector column
         tr.appendChild(el("td", null, a.connector));
 
-        // Phase column with description
         var phaseTd = el("td");
-        var badge = el("span", "phase " + phaseClass(a.phase), a.phase);
-        phaseTd.appendChild(badge);
-        phaseTd.appendChild(document.createTextNode(" (" + fmtDuration(now - a.phaseStartedAt) + ")"));
+        phaseTd.appendChild(el("span", "badge " + badgeClass(a.phase), a.phase));
         var hint = PHASE_HINTS[a.phase] || PHASE_HINTS[(a.phase || "").toLowerCase()];
-        if (hint) {
-          phaseTd.appendChild(el("span", "phase-hint", hint));
-        }
+        if (hint) phaseTd.appendChild(el("span", "phase-hint", hint));
         tr.appendChild(phaseTd);
 
-        // Task column with title
         var taskTd = el("td");
         if (a.taskId) {
-          taskTd.appendChild(el("span", "task-id", a.taskId));
-          if (a.taskTitle) {
-            taskTd.appendChild(el("span", "task-title", a.taskTitle));
-          }
+          taskTd.appendChild(el("span", "mono", a.taskId));
+          if (a.taskTitle) taskTd.appendChild(el("span", "task-title", a.taskTitle));
         } else {
-          taskTd.appendChild(el("span", "task-id", "\u2014"));
+          taskTd.appendChild(el("span", "mono", "\u2014"));
           taskTd.appendChild(el("span", "task-title", "Scanning for tasks..."));
         }
         tr.appendChild(taskTd);
-
-        // Elapsed column
-        tr.appendChild(el("td", null, fmtDuration(now - a.startedAt)));
+        tr.appendChild(el("td", "mono", fmtDuration(now - a.startedAt)));
         tbody.appendChild(tr);
       });
       updatePipelineCounts(agents);
@@ -436,34 +567,60 @@
   function updatePipelineCounts(agents) {
     var counts = { preflight: 0, execute: 0, critic: 0, eval: 0 };
     (agents || []).forEach(function(a) {
-      var bucket = phaseBucket(a.phase);
-      if (bucket && counts[bucket] !== undefined) counts[bucket]++;
+      var b = phaseBucket(a.phase);
+      if (b && counts[b] !== undefined) counts[b]++;
     });
-    var buckets = ["preflight", "execute", "critic", "eval"];
-    buckets.forEach(function(b) {
-      var countEl = document.getElementById("count-" + b);
-      if (countEl) countEl.textContent = counts[b];
-      var stepEl = countEl ? countEl.closest(".pipeline-step") : null;
-      if (stepEl) {
-        if (counts[b] > 0) { stepEl.classList.add("active"); } else { stepEl.classList.remove("active"); }
-      }
+    ["preflight", "execute", "critic", "eval"].forEach(function(b) {
+      var ce = document.getElementById("count-" + b);
+      if (ce) ce.textContent = counts[b];
+      var step = ce ? ce.closest(".pipeline-step") : null;
+      if (step) { counts[b] > 0 ? step.classList.add("active") : step.classList.remove("active"); }
     });
   }
 
+  // ── Connectors ─────────────────────────────
   function refreshConnectors() {
     fetchJSON("/api/connectors", function(conns) {
-      var grid = document.getElementById("connectorsGrid");
-      clearChildren(grid);
+      document.getElementById("navConnCount").textContent = conns ? conns.length : 0;
+      var list = document.getElementById("connectorsListPage");
+      clearChildren(list);
       if (!conns || conns.length === 0) {
-        grid.appendChild(el("div", "empty-state", "No connectors found"));
+        list.appendChild(el("div", "empty-row", "No connectors found"));
         return;
       }
       conns.forEach(function(c) {
         connectorSet.add(c.name);
-        var card = el("div", "connector-card");
-        card.appendChild(el("div", "connector-name", c.name));
-        card.appendChild(el("div", "connector-stat", "Polls: " + c.polls + " \u00B7 Done: " + c.doneCount));
-        grid.appendChild(card);
+        var row = el("div", "connector-row");
+        row.addEventListener("click", function() {
+          fetchJSON("/api/audit/" + encodeURIComponent(c.name), function(entries) {
+            var lines = entries.map(function(e) {
+              return [e.timestamp, e.type, e.taskId || "", e.title || "", e.detail || ""].join(" | ");
+            }).join("\n");
+            openModal("Connector: " + c.name, lines || "(no audit entries)");
+          });
+        });
+
+        var icon = el("div", "connector-icon");
+        icon.textContent = c.name.charAt(0).toUpperCase();
+        row.appendChild(icon);
+
+        var info = el("div", "connector-info");
+        info.appendChild(el("div", "connector-info-name", c.name));
+        info.appendChild(el("div", "connector-info-meta", "Click to view audit log"));
+        row.appendChild(info);
+
+        var stats = el("div", "connector-stats");
+        var pollStat = el("div", "connector-stat-item");
+        pollStat.appendChild(el("div", "connector-stat-value", String(c.polls)));
+        pollStat.appendChild(el("div", "connector-stat-label", "Polls"));
+        stats.appendChild(pollStat);
+        var doneStat = el("div", "connector-stat-item");
+        doneStat.appendChild(el("div", "connector-stat-value", String(c.doneCount)));
+        doneStat.appendChild(el("div", "connector-stat-label", "Done"));
+        stats.appendChild(doneStat);
+        row.appendChild(stats);
+
+        list.appendChild(row);
       });
       updateFilterOptions();
     });
@@ -473,23 +630,127 @@
     var sel = document.getElementById("logFilter");
     var cur = sel.value;
     clearChildren(sel);
-    var allOpt = el("option", null, "All connectors");
-    allOpt.value = "";
-    sel.appendChild(allOpt);
-    var sorted = Array.from(connectorSet).sort();
-    sorted.forEach(function(n) {
-      var opt = el("option", null, n);
-      opt.value = n;
+    var all = el("option", null, "All"); all.value = ""; sel.appendChild(all);
+    Array.from(connectorSet).sort().forEach(function(n) {
+      var opt = el("option", null, n); opt.value = n;
       if (n === cur) opt.selected = true;
       sel.appendChild(opt);
     });
   }
 
-  // --- Log feed (safe DOM construction) ---
+  // ── Tools ──────────────────────────────────
+  function refreshTools() {
+    fetchJSON("/api/tools", function(tools) {
+      document.getElementById("navToolCount").textContent = tools ? tools.length : 0;
+      var grid = document.getElementById("toolsGrid");
+      var countEl = document.getElementById("toolCount");
+      clearChildren(grid);
+      if (!tools || tools.length === 0) {
+        grid.appendChild(el("div", "empty-row", "No tools discovered yet"));
+        countEl.textContent = "";
+        return;
+      }
+      countEl.textContent = tools.length + " tool" + (tools.length === 1 ? "" : "s");
+      tools.forEach(function(t) {
+        var card = el("div", "item-card");
+        card.appendChild(el("div", "item-name", t.name));
+        card.appendChild(el("div", "item-path", t.path));
+        var preview = t.content.split("\n").filter(function(l) { return l.trim(); }).slice(0, 4).join("\n").slice(0, 200);
+        card.appendChild(el("div", "item-preview", preview));
+        card.addEventListener("click", function() { openModal("Tool: " + t.name, t.content); });
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  // ── Skills ─────────────────────────────────
+  function refreshSkills() {
+    fetchJSON("/api/skills", function(skills) {
+      document.getElementById("navSkillCount").textContent = skills ? skills.length : 0;
+      var grid = document.getElementById("skillsGrid");
+      var countEl = document.getElementById("skillCount");
+      clearChildren(grid);
+      if (!skills || skills.length === 0) {
+        grid.appendChild(el("div", "empty-row", "No skills learned yet"));
+        countEl.textContent = "";
+        return;
+      }
+      countEl.textContent = skills.length + " skill" + (skills.length === 1 ? "" : "s");
+      skills.forEach(function(s) {
+        var card = el("div", "item-card");
+        card.appendChild(el("div", "item-name", s.name));
+        card.appendChild(el("div", "item-path", s.path));
+        var preview = s.content.split("\n").filter(function(l) { return l.trim(); }).slice(0, 4).join("\n").slice(0, 200);
+        card.appendChild(el("div", "item-preview", preview));
+        card.addEventListener("click", function() { openModal("Skill: " + s.name, s.content); });
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  // ── Loops ──────────────────────────────────
+  function refreshLoops() {
+    fetchJSON("/api/loops", function(loops) {
+      document.getElementById("navLoopCount").textContent = loops ? loops.length : 0;
+      var grid = document.getElementById("loopsGrid");
+      clearChildren(grid);
+      if (!loops || loops.length === 0) {
+        grid.appendChild(el("div", "empty-row", "No loops registered"));
+        return;
+      }
+      loops.forEach(function(loop) {
+        var card = el("div", "loop-card");
+        var header = el("div", "loop-card-header");
+        header.appendChild(el("span", "loop-name", loop.name));
+        var sCls = loop.running ? "badge badge-blue" : "badge badge-gray";
+        header.appendChild(el("span", sCls, loop.running ? "Running" : "Idle"));
+        card.appendChild(header);
+
+        var meta = el("div", "loop-meta");
+        [["Interval", fmtInterval(loop.intervalSecs)],
+         ["Total runs", String(loop.runCount)],
+         ["Last run", loop.lastRunAt ? fmtAgo(loop.lastRunAt) : "Never"],
+         ["Next run", loop.nextRunAt ? fmtAgo(loop.nextRunAt) : (loop.running ? "In progress" : "\u2014")]
+        ].forEach(function(pair) {
+          var row = el("div", "loop-meta-row");
+          row.appendChild(el("span", "loop-meta-label", pair[0]));
+          row.appendChild(el("span", "loop-meta-value", pair[1]));
+          meta.appendChild(row);
+        });
+        card.appendChild(meta);
+
+        if (loop.history && loop.history.length > 0) {
+          var histDiv = el("div", "loop-history");
+          var toggle = el("button", "loop-history-toggle", "View history (" + loop.history.length + ")");
+          var list = el("div", "loop-history-list");
+          list.style.display = "none";
+          toggle.addEventListener("click", function() {
+            var open = list.style.display !== "none";
+            list.style.display = open ? "none" : "block";
+            toggle.textContent = open ? "View history (" + loop.history.length + ")" : "Hide history";
+          });
+          loop.history.slice().reverse().forEach(function(run) {
+            var row = el("div", "loop-run");
+            row.appendChild(el("span", "log-time", fmtTime(run.startedAt)));
+            row.appendChild(el("span", run.outcome === "ok" ? "loop-run-ok" : "loop-run-error",
+              run.outcome === "ok" ? "OK" : "ERR"));
+            row.appendChild(el("span", null, fmtDuration(run.durationMs)));
+            if (run.error) row.appendChild(el("span", "loop-run-error", run.error.slice(0, 80)));
+            list.appendChild(row);
+          });
+          histDiv.appendChild(toggle);
+          histDiv.appendChild(list);
+          card.appendChild(histDiv);
+        }
+        grid.appendChild(card);
+      });
+    });
+  }
+
+  // ── Log feed ───────────────────────────────
   function addLogEntry(event) {
     connectorSet.add(event.connector);
     var msg = event.message || event.title || event.phase || event.result || "event";
-    // Add more context for phase events
     if (event.type === "summary") {
       msg = event.summary || ("Pipeline complete: " + (event.title || event.taskId));
     } else if (event.type === "phase") {
@@ -503,25 +764,25 @@
     }
     var level = event.level || (event.type === "rate_limited" ? "warn" : "info");
     logs.push({ time: event.timestamp, connector: event.connector, msg: msg, level: level, taskId: event.taskId });
-    if (logs.length > MAX_LOG_ENTRIES) logs.shift();
+    if (logs.length > MAX_LOG) logs.shift();
     renderLogs();
   }
 
   function renderLogs() {
     var feed = document.getElementById("logFeed");
     var filtered = currentFilter ? logs.filter(function(l) { return l.connector === currentFilter; }) : logs;
-    var wasAtBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    var atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
     clearChildren(feed);
     filtered.forEach(function(l) {
       var entry = el("div", "log-entry");
       entry.appendChild(el("span", "log-time", fmtTime(l.time)));
       var tag = l.taskId ? l.connector + "/" + l.taskId : l.connector;
       entry.appendChild(el("span", "log-connector", "[" + tag + "]"));
-      var msgCls = "log-msg" + (l.level === "error" ? " log-error" : l.level === "warn" ? " log-warn" : "");
-      entry.appendChild(el("span", msgCls, l.msg));
+      var cls = "log-msg" + (l.level === "error" ? " log-error" : l.level === "warn" ? " log-warn" : "");
+      entry.appendChild(el("span", cls, l.msg));
       feed.appendChild(entry);
     });
-    if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
+    if (atBottom) feed.scrollTop = feed.scrollHeight;
   }
 
   document.getElementById("logFilter").addEventListener("change", function() {
@@ -529,215 +790,66 @@
     renderLogs();
   });
 
-  // --- Completions ---
+  // ── Completions ────────────────────────────
   function addCompletion(event) {
     completions.unshift(event);
     if (completions.length > MAX_COMPLETIONS) completions.pop();
     renderCompletions();
   }
 
-  function qualityClass(q) {
-    var n = parseInt(q, 10);
-    if (n >= 8) return "quality-high";
-    if (n >= 5) return "quality-mid";
-    return "quality-low";
-  }
-
   function renderCompletions() {
     var list = document.getElementById("completionsList");
     clearChildren(list);
     if (completions.length === 0) {
-      list.appendChild(el("div", "empty-state", "No completed tasks yet"));
+      list.appendChild(el("div", "empty-row", "No completed tasks yet"));
       return;
     }
     completions.forEach(function(c) {
       var card = el("div", "completion-card");
-
       var header = el("div", "completion-header");
       header.appendChild(el("span", "completion-title", c.title || "Untitled task"));
       header.appendChild(el("span", "completion-tag", c.connector + "/" + (c.taskId || "?")));
       card.appendChild(header);
-
-      if (c.result) {
-        card.appendChild(el("div", "completion-result", c.result));
-      }
-
+      if (c.result) card.appendChild(el("div", "completion-result", c.result));
       var meta = el("div", "completion-meta");
       if (c.quality) {
-        var qBadge = el("span", "quality-badge " + qualityClass(c.quality), "Quality: " + c.quality + "/10");
-        meta.appendChild(qBadge);
+        var n = parseInt(c.quality, 10);
+        var qCls = n >= 8 ? "quality-high" : n >= 5 ? "quality-mid" : "quality-low";
+        meta.appendChild(el("span", qCls, "Quality: " + c.quality + "/10"));
       }
-      if (c.cost) {
-        meta.appendChild(el("span", null, "Cost: $" + c.cost.toFixed(4)));
-      }
+      if (c.cost) meta.appendChild(el("span", null, "Cost: $" + c.cost.toFixed(4)));
       meta.appendChild(el("span", null, fmtTime(c.timestamp)));
-
-      // Parse summary for critic status
       if (c.summary) {
-        var criticLine = c.summary.split("\n").find(function(l) { return l.indexOf("Critic:") === 0; });
-        if (criticLine) meta.appendChild(el("span", null, criticLine));
-        var timeLine = c.summary.split("\n").find(function(l) { return l.indexOf("Total time:") === 0; });
-        if (timeLine) meta.appendChild(el("span", null, timeLine));
+        var lines = c.summary.split("\n");
+        var crit = lines.find(function(l) { return l.indexOf("Critic:") === 0; });
+        if (crit) meta.appendChild(el("span", null, crit));
+        var time = lines.find(function(l) { return l.indexOf("Total time:") === 0; });
+        if (time) meta.appendChild(el("span", null, time));
       }
       card.appendChild(meta);
       list.appendChild(card);
     });
   }
 
-  // --- SSE ---
+  // ── SSE ────────────────────────────────────
   function connectSSE() {
     var es = new EventSource("/api/events");
-    es.onopen = function() {
-      document.getElementById("connDot").className = "conn-dot connected";
-    };
+    es.onopen = function() { document.getElementById("connDot").className = "conn-dot connected"; };
     es.onmessage = function(e) {
       try {
         var event = JSON.parse(e.data);
         addLogEntry(event);
-        if (event.type === "summary") {
-          addCompletion(event);
-          refreshStatus();
-          refreshAgents();
-          refreshConnectors();
-        } else if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
-          refreshStatus();
-          refreshAgents();
+        if (event.type === "summary") { addCompletion(event); refreshStatus(); refreshAgents(); refreshConnectors(); }
+        else if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
+          refreshStatus(); refreshAgents();
           if (event.type === "completed") refreshConnectors();
         }
-      } catch(ex) { /* ignore parse errors */ }
+      } catch(ex) {}
     };
-    es.onerror = function() {
-      document.getElementById("connDot").className = "conn-dot disconnected";
-    };
+    es.onerror = function() { document.getElementById("connDot").className = "conn-dot disconnected"; };
   }
 
-  // --- Loops ---
-  function refreshLoops() {
-    fetchJSON("/api/loops", function(loops) {
-      var grid = document.getElementById("loopsGrid");
-      clearChildren(grid);
-      if (!loops || loops.length === 0) {
-        grid.appendChild(el("div", "empty-state", "No loops registered"));
-        return;
-      }
-      loops.forEach(function(loop) {
-        var card = el("div", "loop-card");
-
-        var header = el("div", "loop-card-header");
-        header.appendChild(el("span", "loop-name", loop.name));
-        var statusCls = loop.running ? "loop-status loop-status-running" : "loop-status loop-status-idle";
-        var statusText = loop.running ? "running" : "idle";
-        header.appendChild(el("span", statusCls, statusText));
-        card.appendChild(header);
-
-        var meta = el("div", "loop-meta");
-        meta.appendChild(el("div", null, "Interval: " + fmtIntervalHuman(loop.intervalSecs)));
-        meta.appendChild(el("div", null, "Runs: " + loop.runCount));
-        meta.appendChild(el("div", null, "Last run: " + (loop.lastRunAt ? fmtTimeAgo(loop.lastRunAt) : "never")));
-        meta.appendChild(el("div", null, "Next run: " + (loop.nextRunAt ? fmtTimeAgo(loop.nextRunAt) : (loop.running ? "in progress" : "—"))));
-        card.appendChild(meta);
-
-        // History toggle
-        if (loop.history && loop.history.length > 0) {
-          var histDiv = el("div", "loop-history");
-          var toggle = el("button", "loop-history-toggle", "Show history (" + loop.history.length + " runs)");
-          var list = el("div", "loop-history-list");
-          list.style.display = "none";
-          toggle.addEventListener("click", function() {
-            if (list.style.display === "none") {
-              list.style.display = "block";
-              toggle.textContent = "Hide history";
-            } else {
-              list.style.display = "none";
-              toggle.textContent = "Show history (" + loop.history.length + " runs)";
-            }
-          });
-          // Most recent first
-          loop.history.slice().reverse().forEach(function(run) {
-            var row = el("div", "loop-run");
-            row.appendChild(el("span", "log-time", fmtTime(run.startedAt)));
-            row.appendChild(el("span", run.outcome === "ok" ? "loop-run-ok" : "loop-run-error", run.outcome === "ok" ? "OK" : "ERR"));
-            row.appendChild(el("span", null, fmtDuration(run.durationMs)));
-            if (run.error) {
-              row.appendChild(el("span", "loop-run-error", run.error.slice(0, 60)));
-            }
-            list.appendChild(row);
-          });
-          histDiv.appendChild(toggle);
-          histDiv.appendChild(list);
-          card.appendChild(histDiv);
-        }
-        grid.appendChild(card);
-      });
-    });
-  }
-
-  function fmtIntervalHuman(secs) {
-    if (secs < 60) return secs + "s";
-    if (secs < 3600) return Math.round(secs / 60) + "m";
-    if (secs < 86400) return Math.round(secs / 3600) + "h";
-    return Math.round(secs / 86400) + "d";
-  }
-
-  function fmtTimeAgo(ts) {
-    var diff = Date.now() - ts;
-    if (diff < 0) return "in " + fmtDuration(-diff);
-    if (diff < 1000) return "just now";
-    return fmtDuration(diff) + " ago";
-  }
-
-  // --- Tools & Skills ---
-  function refreshTools() {
-    fetchJSON("/api/tools", function(tools) {
-      var grid = document.getElementById("toolsGrid");
-      clearChildren(grid);
-      if (!tools || tools.length === 0) {
-        grid.appendChild(el("div", "empty-state", "No tools yet"));
-        return;
-      }
-      tools.forEach(function(t) {
-        var card = el("div", "item-card");
-        card.appendChild(el("div", "item-name", t.name));
-        card.appendChild(el("div", "item-path", t.path));
-        var preview = t.content.split("\n").slice(0, 4).join("\n").slice(0, 200);
-        card.appendChild(el("div", "item-preview", preview));
-        card.addEventListener("click", function() { openModal("Tool: " + t.name, t.content); });
-        grid.appendChild(card);
-      });
-    });
-  }
-
-  function refreshSkills() {
-    fetchJSON("/api/skills", function(skills) {
-      var grid = document.getElementById("skillsGrid");
-      clearChildren(grid);
-      if (!skills || skills.length === 0) {
-        grid.appendChild(el("div", "empty-state", "No skills yet"));
-        return;
-      }
-      skills.forEach(function(s) {
-        var card = el("div", "item-card");
-        card.appendChild(el("div", "item-name", s.name));
-        card.appendChild(el("div", "item-path", s.path));
-        var preview = s.content.split("\n").slice(0, 4).join("\n").slice(0, 200);
-        card.appendChild(el("div", "item-preview", preview));
-        card.addEventListener("click", function() { openModal("Skill: " + s.name, s.content); });
-        grid.appendChild(card);
-      });
-    });
-  }
-
-  // --- Tabs ---
-  document.querySelectorAll(".tab-btn").forEach(function(btn) {
-    btn.addEventListener("click", function() {
-      document.querySelectorAll(".tab-btn").forEach(function(b) { b.classList.remove("active"); });
-      document.querySelectorAll(".tab-content").forEach(function(c) { c.classList.remove("active"); });
-      btn.classList.add("active");
-      document.getElementById(btn.getAttribute("data-tab")).classList.add("active");
-    });
-  });
-
-  // --- Modal ---
+  // ── Modal ──────────────────────────────────
   function openModal(title, content) {
     document.getElementById("modalTitle").textContent = title;
     document.getElementById("modalBody").textContent = content;
@@ -749,14 +861,12 @@
   document.getElementById("modalOverlay").addEventListener("click", function(e) {
     if (e.target === this) this.classList.remove("active");
   });
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") document.getElementById("modalOverlay").classList.remove("active");
+  });
 
-  // --- Init ---
-  refreshStatus();
-  refreshAgents();
-  refreshConnectors();
-  refreshLoops();
-  refreshTools();
-  refreshSkills();
+  // ── Init ───────────────────────────────────
+  refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); refreshTools(); refreshSkills();
   connectSSE();
   setInterval(function() { refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); }, 10000);
   setInterval(function() { refreshTools(); refreshSkills(); }, 60000);
