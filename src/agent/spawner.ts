@@ -10,14 +10,16 @@ import { appendRunLog } from "../utils/run-logger.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = resolve(__dirname, "../../prompts");
 
-/** Templates that only operate on vault files — don't need Claude Code's full
- *  system prompt, hooks, memory, LSP, or CLAUDE.md discovery. Using --bare
- *  saves ~15-20K input tokens per spawn. */
+/** Templates that don't need Claude Code's full system prompt, hooks, memory,
+ *  LSP, or CLAUDE.md discovery. Using --bare saves ~15-20K input tokens per
+ *  spawn. Only connector-run (executes code) and task-recover (resumes session)
+ *  need the full IDE context. */
 const BARE_TEMPLATES = new Set([
   "tool-review", "tool-extract", "tool-gen",
   "skill-extract", "skill-organize", "skill-select",
   "knowledge-lint", "knowledge-ingest", "knowledge-query",
   "feedback-check", "feedback-learn",
+  "task-preflight", "task-critique", "eval-run",
 ]);
 
 export interface SpawnResult extends CLIResult {
