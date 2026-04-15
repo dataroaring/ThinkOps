@@ -39,6 +39,13 @@ interface LoopState {
 }
 
 const LOOP_HISTORY_SIZE = 20;
+/** Max safe setTimeout delay — 32-bit signed int limit (~24.8 days). */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** setTimeout clamped to 32-bit max to avoid Node.js overflow warning. */
+function safeTimeout(fn: () => void, ms: number): NodeJS.Timeout {
+  return setTimeout(fn, Math.min(ms, MAX_TIMEOUT_MS));
+}
 
 /** Per-run logging context — every log line includes connector, taskId, and timing. */
 class RunLog {
@@ -522,7 +529,7 @@ export class Orchestrator {
         }
       }
       if (this.running) {
-        const timer = setTimeout(discover, this.config.taskPollInterval * 1000);
+        const timer = safeTimeout(discover, this.config.taskPollInterval * 1000);
         this.timers.push(timer);
       }
     };
@@ -539,7 +546,7 @@ export class Orchestrator {
         const waitSecs = Math.round((backoff.until - Date.now()) / 1000);
         console.log(`${ts()} [${name}] rate-limited, backing off for ${waitSecs}s`);
         if (this.running) {
-          const timer = setTimeout(poll, Math.min(backoff.until - Date.now(), 60_000));
+          const timer = safeTimeout(poll, Math.min(backoff.until - Date.now(), 60_000));
           this.timers.push(timer);
         }
         return;
@@ -556,7 +563,7 @@ export class Orchestrator {
       }
       this.loopFinish("connectors", start, err);
       if (this.running) {
-        const timer = setTimeout(poll, this.config.taskPollInterval * 1000);
+        const timer = safeTimeout(poll, this.config.taskPollInterval * 1000);
         this.timers.push(timer);
       }
     };
@@ -1375,11 +1382,11 @@ export class Orchestrator {
       }
       this.loopFinish("knowledge-lint", start, err);
       if (this.running) {
-        const timer = setTimeout(lintLoop, lintInterval);
+        const timer = safeTimeout(lintLoop, lintInterval);
         this.timers.push(timer);
       }
     };
-    const lintTimer = setTimeout(lintLoop, lintInterval);
+    const lintTimer = safeTimeout(lintLoop, lintInterval);
     this.timers.push(lintTimer);
   }
 
@@ -1398,11 +1405,11 @@ export class Orchestrator {
       } catch (e) { err = e; }
       this.loopFinish("skill-extract", start, err);
       if (this.running) {
-        const timer = setTimeout(extractLoop, extractInterval);
+        const timer = safeTimeout(extractLoop, extractInterval);
         this.timers.push(timer);
       }
     };
-    const extractTimer = setTimeout(extractLoop, extractInterval);
+    const extractTimer = safeTimeout(extractLoop, extractInterval);
     this.timers.push(extractTimer);
 
     // Less frequent skill organization
@@ -1431,11 +1438,11 @@ export class Orchestrator {
       }
       this.loopFinish("skill-organize", start, err);
       if (this.running) {
-        const timer = setTimeout(organizeLoop, organizeInterval);
+        const timer = safeTimeout(organizeLoop, organizeInterval);
         this.timers.push(timer);
       }
     };
-    const organizeTimer = setTimeout(organizeLoop, organizeInterval);
+    const organizeTimer = safeTimeout(organizeLoop, organizeInterval);
     this.timers.push(organizeTimer);
   }
 
@@ -1652,11 +1659,11 @@ export class Orchestrator {
       }
       this.loopFinish("tool-review", start, err);
       if (this.running) {
-        const timer = setTimeout(loop, reviewInterval);
+        const timer = safeTimeout(loop, reviewInterval);
         this.timers.push(timer);
       }
     };
-    const timer = setTimeout(loop, reviewInterval);
+    const timer = safeTimeout(loop, reviewInterval);
     this.timers.push(timer);
   }
 
@@ -1676,11 +1683,11 @@ export class Orchestrator {
       }
       this.loopFinish("feedback", start, err);
       if (this.running) {
-        const timer = setTimeout(loop, interval);
+        const timer = safeTimeout(loop, interval);
         this.timers.push(timer);
       }
     };
-    const timer = setTimeout(loop, interval);
+    const timer = safeTimeout(loop, interval);
     this.timers.push(timer);
   }
 
