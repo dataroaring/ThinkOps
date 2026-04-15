@@ -676,19 +676,17 @@ export class Orchestrator {
     const taskCwd = cwdMatch?.[1]?.trim();
     if (taskCwd) run.log(`cwd: ${taskCwd}`);
 
-    // Acquire concurrency slot before spawning agent
+    // Acquire concurrency slot for preflight
     if (!(await this.acquireSlot(name))) return;
-
-    this.setPhase(name, "preflight");
 
     try {
       // Load past eval findings for failure memory + analogical reasoning
       const pastFindings = await this.loadPastFindings(name);
 
-      // Phase 1: Pre-flight analysis — LLM thinks about best approach
+      // Phase 1: Pre-flight — analyze state and split into sub-tasks
       run.startPhase("preflight");
       this.setPhase(name, "preflight");
-      this.emitEvent({ type: "log", connector: name, message: `Analyzing ${name}: reading state, past lessons (${doneCount} prior tasks)`, level: "info", timestamp: Date.now() });
+      this.emitEvent({ type: "log", connector: name, message: `Analyzing ${name}: splitting into sub-tasks`, level: "info", timestamp: Date.now() });
       const auditTail = tailLines(auditLog, 50);
       const preflight = await spawn(this.config, "task-preflight", {
         connector_content: content,
@@ -698,323 +696,376 @@ export class Orchestrator {
 
       const preflightOutput = preflight.output;
       run.log(`pre-flight done (in: ${preflight.inputChars}c, out: ${preflightOutput.length}c)`);
-      this.emitEvent({ type: "log", connector: name, message: `Pre-flight complete (in: ${fmtChars(preflight.inputChars)}, out: ${fmtChars(preflight.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: preflight.inputChars, outputChars: preflight.outputChars });
 
       // Record preflight actions for pattern detection
       if (preflight.actions?.length) {
         this.recordAndLearn(name, "task-preflight", preflight.actions, preflightOutput, preflight.cost).catch(() => {});
       }
 
-      // Select relevant skills
-      run.startPhase("skill-select");
-      this.setPhase(name, "skill-select");
-      const skillContext = await this.loadSkillContext(content);
-
-      // Phase 2: Execute with pre-flight guidance
-      run.startPhase("execute");
-      this.setPhase(name, "execute");
-      this.emitEvent({ type: "log", connector: name, message: "Fetching task, executing with pre-flight guidance", level: "info", timestamp: Date.now() });
-
-      const result = await spawn(this.config, "connector-run", {
-        connector_path: path,
-        connector_content: content,
-        audit_log: auditTail || "(empty — no tasks completed yet)",
-        skill_context: truncate(skillContext, 8000),
-        preflight_analysis: truncate(preflightOutput, 5000),
-      }, { cwd: taskCwd, label: name });
-      this.emitEvent({ type: "log", connector: name, message: `Execute done (in: ${fmtChars(result.inputChars)}, out: ${fmtChars(result.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: result.inputChars, outputChars: result.outputChars });
-
-      // Handle human input loop
-      let current = result;
-      while (current.humanInputNeeded) {
-        run.startPhase("human-input");
-        this.setPhase(name, "human-input");
-        run.log(`waiting for human: ${current.humanInputNeeded}`);
-        try {
-          const answer = await this.bot.askQuestion(current.humanInputNeeded);
-          run.log(`user replied, resuming session ${current.sessionId}`);
-          run.startPhase("execute (resumed)");
-          this.setPhase(name, "execute (resumed)");
-          current = await resume(
-            this.config,
-            current.sessionId,
-            `The user answered: ${answer}\n\nPlease continue executing the task.`,
-          );
-        } catch (err) {
-          run.error("Q&A timed out", err);
-          this.bot.notify(`[${name}] timed out waiting for input.`).catch(() => {});
-          break;
-        }
-      }
-
-      // Rate limit detection
-      if (isRateLimited(current.output)) {
-        run.warn("rate limit detected — applying backoff");
-        const existing = this.rateLimitBackoff.get(name);
-        const delay = existing ? Math.min(existing.delay * 2, this.BACKOFF_MAX) : this.BACKOFF_INITIAL;
-        const until = Date.now() + delay;
-        this.rateLimitBackoff.set(name, { until, delay });
-        this.emitEvent({
-          type: "rate_limited",
-          connector: name,
-          timestamp: Date.now(),
-          message: `Rate limited, backing off for ${Math.round(delay / 60000)}min`,
-          backoffUntil: until,
-        });
-        this.bot.notify(`[${name}] rate-limited, backing off for ${Math.round(delay / 60000)}min`).catch(() => {});
-        console.log(run.summary("rate-limited"));
-        return;
-      }
-      // Clear backoff on successful run
-      this.rateLimitBackoff.delete(name);
-
-      // Parse result
-      // Record actions for pattern detection (non-blocking)
-      if (current.actions?.length) {
-        this.recordAndLearn(name, "connector-run", current.actions, current.output, current.cost).catch((err) => {
-          console.warn(`[${name}] action recording failed (non-fatal):`, err instanceof Error ? err.message : err);
-        });
-      }
-
-      if (current.output.includes("NO_TASKS_AVAILABLE")) {
-        run.log("result: no new tasks");
+      // Check for no tasks
+      if (preflightOutput.includes("NO_TASKS_AVAILABLE")) {
+        run.log("preflight: no tasks available");
         this.totalNoTasks++;
         this.pollSlower(name);
         await this.appendAuditCheck(name);
-
         console.log(run.summary("no tasks"));
-      } else {
-        let completed = parseTaskCompleted(current.output);
-        if (completed) {
-          this.pollFaster(name); // Found work — check again sooner
-          run.taskId = completed.id;
-          this.setPhase(name, "completed", completed.id, completed.title);
-          run.log(`task done: ${completed.title}`);
-          run.log(`result: ${completed.result}`);
-          if (completed.dispositions) run.log(`dispositions:\n${completed.dispositions}`);
-          this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: `Task done: ${completed.title} — ${completed.result}`, level: "info", timestamp: Date.now() });
+        return;
+      }
 
-          // Run critic agent to challenge the result
-          run.startPhase("critic");
-          this.setPhase(name, "critic", completed.id, completed.title);
-          this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: "Critic challenging the result", level: "info", timestamp: Date.now() });
-          const critique = await this.runCritique(name, content, completed, current.output);
+      // Parse sub-tasks from preflight output
+      const subtasks = parseSubTasks(preflightOutput);
+      if (subtasks.length === 0) {
+        run.warn("preflight produced no parseable sub-tasks — falling back to single run");
+        await this.runSingleTask(name, path, content, auditTail, preflightOutput, taskCwd, run);
+        return;
+      }
 
-          if (critique === "needs_fix" && current.sessionId) {
-            run.startPhase("fix-pass");
-            this.setPhase(name, "fix-pass", completed.id, completed.title);
-            run.log("critic found issues — running fix pass");
-            current = await resume(
-              this.config,
-              current.sessionId,
-              "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.",
-            );
-            const fixed = parseTaskCompleted(current.output);
-            if (fixed) completed = fixed;
-            run.log("fix pass complete");
-          }
+      run.log(`preflight: ${subtasks.length} sub-tasks (${subtasks.filter(s => s.fast).length} fast, ${subtasks.filter(s => !s.fast).length} full)`);
+      this.pollFaster(name);
 
-          if (current.cost) run.log(`cost: $${current.cost.toFixed(4)}`);
-          if (current.turns) run.log(`turns: ${current.turns}`);
-          await this.appendAuditTask(name, completed);
-          this.totalCompleted++;
-          this.connectorDoneCounts.set(name, (this.connectorDoneCounts.get(name) ?? 0) + 1);
-          this.emitEvent({
-            type: "completed",
-            connector: name,
-            taskId: completed.id,
-            title: completed.title,
-            result: completed.result,
-            cost: current.cost,
-            timestamp: Date.now(),
-          });
+      // Phase 2: Execute sub-tasks
+      // Fast sub-tasks run in parallel, skip critique/eval
+      const fastTasks = subtasks.filter(s => s.fast);
+      const fullTasks = subtasks.filter(s => !s.fast);
 
-          const details = extractKeyDetails(current.output);
-          const notifyLines = [
-            `*Task completed* [${name}/${completed.id}]`,
-            `*${completed.title}*`,
-            completed.result ? `\n${completed.result}` : "",
-            details ? `\n${details}` : "",
-            current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
-            `\n${this.config.brandSignature}`,
-          ].filter(Boolean).join("\n");
-          this.bot.notify(notifyLines).catch(() => {});
+      // Run all fast tasks in parallel
+      if (fastTasks.length > 0) {
+        run.startPhase(`fast-tasks (${fastTasks.length})`);
+        this.setPhase(name, "fast-tasks");
+        this.emitEvent({ type: "log", connector: name, message: `Running ${fastTasks.length} fast sub-tasks in parallel`, level: "info", timestamp: Date.now() });
 
-          // Run eval agent on the completed task
-          run.startPhase("eval");
-          this.setPhase(name, "eval", completed.id, completed.title);
-          const quality = await this.runEval(name, content, completed, current.output);
+        const fastResults = await Promise.allSettled(
+          fastTasks.map(task => this.runFastSubTask(name, path, content, task, taskCwd))
+        );
 
-          // Emit pipeline summary — recap of everything that happened
-          const elapsed = formatDuration(Date.now() - (this.activeAgents.get(name)?.startedAt ?? Date.now()));
-          const summaryLines = [
-            `Pipeline complete: [${name}/${completed.id}]`,
-            `Task: ${completed.title}`,
-            `Result: ${completed.result}`,
-            `Critic: ${critique === "needs_fix" ? "found issues → fix pass applied" : "approved"}`,
-            `Quality: ${quality}/10`,
-            current.cost ? `Cost: $${current.cost.toFixed(4)}` : null,
-            current.turns ? `Turns: ${current.turns}` : null,
-            `Input: ${fmtChars(preflight.inputChars)} (preflight) + ${fmtChars(result.inputChars)} (execute)`,
-            `Total time: ${elapsed}`,
-          ].filter(Boolean).join("\n");
-          this.emitEvent({
-            type: "summary",
-            connector: name,
-            taskId: completed.id,
-            title: completed.title,
-            result: completed.result,
-            quality,
-            cost: current.cost,
-            summary: summaryLines,
-            timestamp: Date.now(),
-          });
-
-          // Extract reusable tools from agent output (background, non-blocking)
-          this.extractTools(current.output, content).catch((err) =>
-            console.error(`[tools] extraction error:`, err)
-          );
-
-          console.log(run.summary(`completed ${completed.id}`));
-        } else if (!current.humanInputNeeded) {
-          // Task failed — run recovery loop
-          run.warn("agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE");
-          const maxAttempts = this.config.maxRecoveryAttempts;
-          let recovered = false;
-
-          for (let attempt = 1; attempt <= maxAttempts && current.sessionId; attempt++) {
-            run.startPhase(`recover (${attempt}/${maxAttempts})`);
-            this.setPhase(name, "recover");
-            this.emitEvent({
-              type: "log",
-              connector: name,
-              message: `Recovery attempt ${attempt}/${maxAttempts} — LLM analyzing failure`,
-              level: "warn",
-              timestamp: Date.now(),
-            });
-
-            const decision = await this.runRecovery(name, content, current.output, attempt, maxAttempts);
-
-            if (decision.action === "retry" && decision.plan) {
-              run.log(`recovery: RETRY — ${decision.analysis}`);
-              run.startPhase(`retry (${attempt}/${maxAttempts})`);
-              this.setPhase(name, "retry");
-              this.emitEvent({
-                type: "log",
-                connector: name,
-                message: `Retrying: ${decision.analysis}`,
-                level: "info",
-                timestamp: Date.now(),
-              });
-
-              current = await resume(
-                this.config,
-                current.sessionId,
-                `Your previous attempt failed. Here is what went wrong and what to do differently:\n\n${decision.analysis}\n\nRecovery plan:\n${decision.plan}\n\nPlease try again following this plan and report TASK_COMPLETED when done.`,
-              );
-
-              // Check if retry succeeded
-              const retryCompleted = parseTaskCompleted(current.output);
-              if (retryCompleted) {
-                run.log(`recovery succeeded on attempt ${attempt}`);
-                completed = retryCompleted;
-                recovered = true;
-                break;
-              }
-              // If still no TASK_COMPLETED, loop continues to next attempt
-            } else if (decision.action === "escalate" && decision.question) {
-              run.log(`recovery: ESCALATE — ${decision.analysis}`);
-              this.emitEvent({
-                type: "log",
-                connector: name,
-                message: `Escalating to human: ${decision.question}`,
-                level: "warn",
-                timestamp: Date.now(),
-              });
-              try {
-                const answer = await this.bot.askQuestion(
-                  `[${name}] Task failed — agent needs help:\n${decision.analysis}\n\n${decision.question}`
-                );
-                run.log(`human replied, resuming with answer`);
-                run.startPhase("execute (recovered)");
-                this.setPhase(name, "execute (recovered)");
-                current = await resume(
-                  this.config,
-                  current.sessionId,
-                  `The task failed previously. A recovery analyst identified the issue: ${decision.analysis}\n\nThe user answered your question: ${answer}\n\nPlease try again with this information and report TASK_COMPLETED when done.`,
-                );
-                const escalateCompleted = parseTaskCompleted(current.output);
-                if (escalateCompleted) {
-                  completed = escalateCompleted;
-                  recovered = true;
-                }
-              } catch {
-                run.warn("escalation timed out");
-              }
-              break; // Don't loop after escalation
-            } else {
-              // ABANDON
-              run.log(`recovery: ABANDON — ${decision.analysis}`);
-              await this.appendAuditAttempted(name, `abandoned: ${decision.analysis}`, current.output);
-              this.emitEvent({
-                type: "log",
-                connector: name,
-                message: `Abandoned: ${decision.analysis}${decision.suggestion ? ` (${decision.suggestion})` : ""}`,
-                level: "error",
-                timestamp: Date.now(),
-              });
-              break;
-            }
-          }
-
-          if (recovered && completed) {
-            // Recovered task goes through the normal completion pipeline
-            this.pollFaster(name);
-            run.taskId = completed.id;
-            this.setPhase(name, "completed", completed.id, completed.title);
-            run.log(`recovered task: ${completed.title}`);
-
-            run.startPhase("critic");
-            this.setPhase(name, "critic", completed.id, completed.title);
-            const critique = await this.runCritique(name, content, completed, current.output);
-            if (critique === "needs_fix" && current.sessionId) {
-              run.startPhase("fix-pass");
-              this.setPhase(name, "fix-pass", completed.id, completed.title);
-              current = await resume(this.config, current.sessionId,
-                "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.");
-              const fixed = parseTaskCompleted(current.output);
-              if (fixed) completed = fixed;
-            }
-
-            await this.appendAuditTask(name, completed);
+        for (let i = 0; i < fastResults.length; i++) {
+          const r = fastResults[i];
+          const task = fastTasks[i];
+          if (r.status === "fulfilled" && r.value) {
+            run.log(`fast [${task.id}]: done — ${r.value.result}`);
+            await this.appendAuditTask(name, r.value);
             this.totalCompleted++;
             this.connectorDoneCounts.set(name, (this.connectorDoneCounts.get(name) ?? 0) + 1);
-            this.emitEvent({ type: "completed", connector: name, taskId: completed.id,
-              title: completed.title, result: completed.result, cost: current.cost, timestamp: Date.now() });
-            this.bot.notify([
-              `*Task completed (recovered)* [${name}/${completed.id}]`,
-              `*${completed.title}*`,
-              completed.result, `\n${this.config.brandSignature}`,
-            ].filter(Boolean).join("\n")).catch(() => {});
-
-            run.startPhase("eval");
-            this.setPhase(name, "eval", completed.id, completed.title);
-            await this.runEval(name, content, completed, current.output);
-            console.log(run.summary(`recovered + completed ${completed.id}`));
-          } else if (!recovered && maxAttempts > 0) {
-            await this.appendAuditAttempted(name, "recovery exhausted", current.output);
-            console.log(run.summary("recovery exhausted"));
+          } else if (r.status === "rejected") {
+            run.warn(`fast [${task.id}]: failed — ${r.reason}`);
           } else {
-            await this.appendAuditAttempted(name, "no result parsed", current.output);
-            console.log(run.summary("no result parsed"));
+            run.log(`fast [${task.id}]: no result`);
           }
         }
+      }
+
+      // Run first full task through the complete pipeline (critic/eval/recovery)
+      if (fullTasks.length > 0) {
+        const task = fullTasks[0]; // One per poll — next poll picks the next one
+        if (fullTasks.length > 1) {
+          run.log(`full: picking "${task.id}" (${fullTasks.length - 1} remaining for next poll)`);
+        }
+        await this.runFullSubTask(name, path, content, auditTail, task, taskCwd, run);
+      }
+
+      if (fastTasks.length > 0 && fullTasks.length === 0) {
+        console.log(run.summary(`${fastTasks.length} fast tasks done`));
       }
     } catch (err) {
       run.error("run failed", err);
     } finally {
       this.activeAgents.delete(name);
       this.releaseSlot(name);
+    }
+  }
+
+  /** Run a fast sub-task — no critique/eval, minimal context. */
+  private async runFastSubTask(
+    connectorName: string,
+    connectorPath: string,
+    connectorContent: string,
+    subtask: SubTask,
+    cwd?: string,
+  ): Promise<{ id: string; title: string; result: string } | null> {
+    const result = await spawn(this.config, "connector-run", {
+      connector_path: connectorPath,
+      connector_content: connectorContent,
+      audit_log: "(see sub-task action for context)",
+      skill_context: "No skills needed for this fast task.",
+      preflight_analysis: `Execute this single sub-task:\nid: ${subtask.id}\naction: ${subtask.action}`,
+    }, { cwd, label: `${connectorName}/${subtask.id}` });
+
+    // Record actions
+    if (result.actions?.length) {
+      this.recordAndLearn(connectorName, "connector-run", result.actions, result.output, result.cost).catch(() => {});
+    }
+
+    const completed = parseTaskCompleted(result.output);
+    if (completed) {
+      this.emitEvent({ type: "completed", connector: connectorName, taskId: completed.id,
+        title: completed.title, result: completed.result, cost: result.cost, timestamp: Date.now() });
+    }
+    return completed;
+  }
+
+  /** Run a full sub-task through the complete pipeline (critique/eval/recovery). */
+  private async runFullSubTask(
+    connectorName: string,
+    connectorPath: string,
+    connectorContent: string,
+    auditTail: string,
+    subtask: SubTask,
+    cwd: string | undefined,
+    run: RunLog,
+  ): Promise<void> {
+    // Select relevant skills
+    run.startPhase("skill-select");
+    this.setPhase(connectorName, "skill-select");
+    const skillContext = await this.loadSkillContext(connectorContent);
+
+    // Execute
+    run.startPhase(`execute [${subtask.id}]`);
+    this.setPhase(connectorName, "execute");
+    this.emitEvent({ type: "log", connector: connectorName, message: `Executing sub-task: ${subtask.id}`, level: "info", timestamp: Date.now() });
+
+    const result = await spawn(this.config, "connector-run", {
+      connector_path: connectorPath,
+      connector_content: connectorContent,
+      audit_log: auditTail || "(empty)",
+      skill_context: truncate(skillContext, 8000),
+      preflight_analysis: `Execute this single sub-task:\nid: ${subtask.id}\naction: ${subtask.action}\npriority: ${subtask.priority}`,
+    }, { cwd, label: `${connectorName}/${subtask.id}` });
+    this.emitEvent({ type: "log", connector: connectorName, message: `Execute done (in: ${fmtChars(result.inputChars)}, out: ${fmtChars(result.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: result.inputChars, outputChars: result.outputChars });
+
+    // Handle human input loop
+    let current = result;
+    while (current.humanInputNeeded) {
+      run.startPhase("human-input");
+      this.setPhase(connectorName, "human-input");
+      run.log(`waiting for human: ${current.humanInputNeeded}`);
+      try {
+        const answer = await this.bot.askQuestion(current.humanInputNeeded);
+        run.log(`user replied, resuming session ${current.sessionId}`);
+        run.startPhase("execute (resumed)");
+        this.setPhase(connectorName, "execute (resumed)");
+        current = await resume(this.config, current.sessionId,
+          `The user answered: ${answer}\n\nPlease continue executing the task.`);
+      } catch (err) {
+        run.error("Q&A timed out", err);
+        this.bot.notify(`[${connectorName}] timed out waiting for input.`).catch(() => {});
+        break;
+      }
+    }
+
+    // Rate limit detection
+    if (isRateLimited(current.output)) {
+      run.warn("rate limit detected — applying backoff");
+      const existing = this.rateLimitBackoff.get(connectorName);
+      const delay = existing ? Math.min(existing.delay * 2, this.BACKOFF_MAX) : this.BACKOFF_INITIAL;
+      const until = Date.now() + delay;
+      this.rateLimitBackoff.set(connectorName, { until, delay });
+      this.emitEvent({ type: "rate_limited", connector: connectorName, timestamp: Date.now(),
+        message: `Rate limited, backing off for ${Math.round(delay / 60000)}min`, backoffUntil: until });
+      this.bot.notify(`[${connectorName}] rate-limited, backing off for ${Math.round(delay / 60000)}min`).catch(() => {});
+      console.log(run.summary("rate-limited"));
+      return;
+    }
+    this.rateLimitBackoff.delete(connectorName);
+
+    // Record actions for pattern detection
+    if (current.actions?.length) {
+      this.recordAndLearn(connectorName, "connector-run", current.actions, current.output, current.cost).catch(() => {});
+    }
+
+    if (current.output.includes("NO_TASKS_AVAILABLE")) {
+      run.log("result: sub-task found no work");
+      await this.appendAuditCheck(connectorName);
+      console.log(run.summary("no tasks"));
+      return;
+    }
+
+    let completed = parseTaskCompleted(current.output);
+    if (completed) {
+      await this.handleCompleted(connectorName, connectorContent, completed, current, run);
+    } else if (!current.humanInputNeeded) {
+      await this.handleRecovery(connectorName, connectorContent, current, run);
+    }
+  }
+
+  /** Fallback: run the old single-spawn approach when preflight doesn't produce sub-tasks. */
+  private async runSingleTask(
+    name: string,
+    path: string,
+    content: string,
+    auditTail: string,
+    preflightOutput: string,
+    cwd: string | undefined,
+    run: RunLog,
+  ): Promise<void> {
+    const skillContext = await this.loadSkillContext(content);
+
+    run.startPhase("execute");
+    this.setPhase(name, "execute");
+    const result = await spawn(this.config, "connector-run", {
+      connector_path: path,
+      connector_content: content,
+      audit_log: auditTail || "(empty)",
+      skill_context: truncate(skillContext, 8000),
+      preflight_analysis: truncate(preflightOutput, 5000),
+    }, { cwd, label: name });
+
+    let current = result;
+    // Record actions
+    if (current.actions?.length) {
+      this.recordAndLearn(name, "connector-run", current.actions, current.output, current.cost).catch(() => {});
+    }
+
+    if (current.output.includes("NO_TASKS_AVAILABLE")) {
+      this.totalNoTasks++;
+      this.pollSlower(name);
+      await this.appendAuditCheck(name);
+      console.log(run.summary("no tasks"));
+    } else {
+      const completed = parseTaskCompleted(current.output);
+      if (completed) {
+        this.pollFaster(name);
+        await this.handleCompleted(name, content, completed, current, run);
+      } else {
+        await this.handleRecovery(name, content, current, run);
+      }
+    }
+  }
+
+  /** Shared completion pipeline: critique → eval → notify. */
+  private async handleCompleted(
+    name: string,
+    connectorContent: string,
+    completed: { id: string; title: string; result: string; dispositions?: string },
+    current: import("./agent/spawner.js").SpawnResult,
+    run: RunLog,
+  ): Promise<void> {
+    this.pollFaster(name);
+    run.taskId = completed.id;
+    this.setPhase(name, "completed", completed.id, completed.title);
+    run.log(`task done: ${completed.title}`);
+    run.log(`result: ${completed.result}`);
+    if (completed.dispositions) run.log(`dispositions:\n${completed.dispositions}`);
+    this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: `Task done: ${completed.title} — ${completed.result}`, level: "info", timestamp: Date.now() });
+
+    // Critique
+    run.startPhase("critic");
+    this.setPhase(name, "critic", completed.id, completed.title);
+    this.emitEvent({ type: "log", connector: name, taskId: completed.id, message: "Critic challenging the result", level: "info", timestamp: Date.now() });
+    const critique = await this.runCritique(name, connectorContent, completed, current.output);
+
+    if (critique === "needs_fix" && current.sessionId) {
+      run.startPhase("fix-pass");
+      this.setPhase(name, "fix-pass", completed.id, completed.title);
+      run.log("critic found issues — running fix pass");
+      current = await resume(this.config, current.sessionId,
+        "A critic agent reviewed your work and found issues. Please fix them and report TASK_COMPLETED again.");
+      const fixed = parseTaskCompleted(current.output);
+      if (fixed) completed = fixed;
+      run.log("fix pass complete");
+    }
+
+    if (current.cost) run.log(`cost: $${current.cost.toFixed(4)}`);
+    if (current.turns) run.log(`turns: ${current.turns}`);
+    await this.appendAuditTask(name, completed);
+    this.totalCompleted++;
+    this.connectorDoneCounts.set(name, (this.connectorDoneCounts.get(name) ?? 0) + 1);
+    this.emitEvent({ type: "completed", connector: name, taskId: completed.id,
+      title: completed.title, result: completed.result, cost: current.cost, timestamp: Date.now() });
+
+    const details = extractKeyDetails(current.output);
+    const notifyLines = [
+      `*Task completed* [${name}/${completed.id}]`,
+      `*${completed.title}*`,
+      completed.result ? `\n${completed.result}` : "",
+      details ? `\n${details}` : "",
+      current.cost ? `\nCost: $${current.cost.toFixed(4)}` : "",
+      `\n${this.config.brandSignature}`,
+    ].filter(Boolean).join("\n");
+    this.bot.notify(notifyLines).catch(() => {});
+
+    // Eval
+    run.startPhase("eval");
+    this.setPhase(name, "eval", completed.id, completed.title);
+    const quality = await this.runEval(name, connectorContent, completed, current.output);
+
+    // Summary
+    const elapsed = formatDuration(Date.now() - (this.activeAgents.get(name)?.startedAt ?? Date.now()));
+    const summaryLines = [
+      `Pipeline complete: [${name}/${completed.id}]`,
+      `Task: ${completed.title}`,
+      `Result: ${completed.result}`,
+      `Critic: ${critique === "needs_fix" ? "found issues → fix pass applied" : "approved"}`,
+      `Quality: ${quality}/10`,
+      current.cost ? `Cost: $${current.cost.toFixed(4)}` : null,
+      current.turns ? `Turns: ${current.turns}` : null,
+      `Total time: ${elapsed}`,
+    ].filter(Boolean).join("\n");
+    this.emitEvent({ type: "summary", connector: name, taskId: completed.id, title: completed.title,
+      result: completed.result, quality, cost: current.cost, summary: summaryLines, timestamp: Date.now() });
+
+    // Extract reusable tools (background)
+    this.extractTools(current.output, connectorContent).catch((err) =>
+      console.error(`[tools] extraction error:`, err));
+
+    console.log(run.summary(`completed ${completed.id}`));
+  }
+
+  /** Shared recovery pipeline: retry → escalate → abandon. */
+  private async handleRecovery(
+    name: string,
+    connectorContent: string,
+    current: import("./agent/spawner.js").SpawnResult,
+    run: RunLog,
+  ): Promise<void> {
+    run.warn("agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE");
+    const maxAttempts = this.config.maxRecoveryAttempts;
+    let recovered = false;
+    let completed: { id: string; title: string; result: string; dispositions?: string } | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts && current.sessionId; attempt++) {
+      run.startPhase(`recover (${attempt}/${maxAttempts})`);
+      this.setPhase(name, "recover");
+      this.emitEvent({ type: "log", connector: name, message: `Recovery attempt ${attempt}/${maxAttempts}`, level: "warn", timestamp: Date.now() });
+
+      const decision = await this.runRecovery(name, connectorContent, current.output, attempt, maxAttempts);
+
+      if (decision.action === "retry" && decision.plan) {
+        run.log(`recovery: RETRY — ${decision.analysis}`);
+        run.startPhase(`retry (${attempt}/${maxAttempts})`);
+        this.setPhase(name, "retry");
+        current = await resume(this.config, current.sessionId,
+          `Your previous attempt failed. Here is what went wrong:\n\n${decision.analysis}\n\nRecovery plan:\n${decision.plan}\n\nPlease try again and report TASK_COMPLETED when done.`);
+        const retryCompleted = parseTaskCompleted(current.output);
+        if (retryCompleted) { completed = retryCompleted; recovered = true; break; }
+      } else if (decision.action === "escalate" && decision.question) {
+        run.log(`recovery: ESCALATE — ${decision.analysis}`);
+        try {
+          const answer = await this.bot.askQuestion(
+            `[${name}] Task failed:\n${decision.analysis}\n\n${decision.question}`);
+          run.startPhase("execute (recovered)");
+          this.setPhase(name, "execute (recovered)");
+          current = await resume(this.config, current.sessionId,
+            `Recovery: ${decision.analysis}\nUser answered: ${answer}\n\nPlease try again and report TASK_COMPLETED when done.`);
+          const esc = parseTaskCompleted(current.output);
+          if (esc) { completed = esc; recovered = true; }
+        } catch { run.warn("escalation timed out"); }
+        break;
+      } else {
+        run.log(`recovery: ABANDON — ${decision.analysis}`);
+        await this.appendAuditAttempted(name, `abandoned: ${decision.analysis}`, current.output);
+        this.emitEvent({ type: "log", connector: name, message: `Abandoned: ${decision.analysis}`, level: "error", timestamp: Date.now() });
+        break;
+      }
+    }
+
+    if (recovered && completed) {
+      await this.handleCompleted(name, connectorContent, completed, current, run);
+    } else if (!recovered && maxAttempts > 0) {
+      await this.appendAuditAttempted(name, "recovery exhausted", current.output);
+      console.log(run.summary("recovery exhausted"));
+    } else {
+      await this.appendAuditAttempted(name, "no result parsed", current.output);
+      console.log(run.summary("no result parsed"));
     }
   }
 
@@ -1875,6 +1926,36 @@ function formatDuration(ms: number): string {
   const hrs = Math.floor(mins / 60);
   const remMins = mins % 60;
   return `${hrs}h${remMins}m`;
+}
+
+interface SubTask {
+  id: string;
+  action: string;
+  priority: "high" | "medium" | "low";
+  fast: boolean;
+}
+
+/** Parse structured sub-tasks from preflight output. */
+function parseSubTasks(output: string): SubTask[] {
+  const subtasks: SubTask[] = [];
+  const subtasksSection = output.match(/subtasks:\s*\n([\s\S]*?)(?:\n```|$)/);
+  if (!subtasksSection) return subtasks;
+
+  const blocks = subtasksSection[1].split(/^- id:\s*/m).filter(Boolean);
+  for (const block of blocks) {
+    const id = block.split("\n")[0]?.trim();
+    const action = block.match(/action:\s*(.+)/)?.[1]?.trim();
+    const priority = (block.match(/priority:\s*(\w+)/)?.[1]?.trim() ?? "medium") as SubTask["priority"];
+    const fast = block.match(/fast:\s*(\w+)/)?.[1]?.trim() === "true";
+    if (id && action) {
+      subtasks.push({ id, action, priority, fast });
+    }
+  }
+
+  // Sort: high priority first, then medium, then low
+  const order = { high: 0, medium: 1, low: 2 };
+  subtasks.sort((a, b) => order[a.priority] - order[b.priority]);
+  return subtasks;
 }
 
 function parseTaskCompleted(output: string): { id: string; title: string; result: string; dispositions?: string } | null {
