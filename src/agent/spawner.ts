@@ -14,7 +14,7 @@ const PROMPTS_DIR = resolve(__dirname, "../../prompts");
  *  system prompt, hooks, memory, LSP, or CLAUDE.md discovery. Using --bare
  *  saves ~15-20K input tokens per spawn. */
 const BARE_TEMPLATES = new Set([
-  "tool-review", "tool-extract",
+  "tool-review", "tool-extract", "tool-gen",
   "skill-extract", "skill-organize", "skill-select",
   "knowledge-lint", "knowledge-ingest", "knowledge-query",
   "feedback-check", "feedback-learn",

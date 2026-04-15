@@ -617,6 +617,17 @@ export class Orchestrator {
     const doneCount = (auditLog.match(/\| DONE \|/g) || []).length;
     run.log(`audit: ${doneCount} tasks completed previously`);
 
+    // Run generated check tool if one exists — skip LLM entirely when 0 new tasks
+    const toolCheck = await this.runGeneratedCheckTool(name);
+    if (toolCheck === 0) {
+      run.log("check-tool: 0 new tasks — skipping LLM");
+      await this.appendAuditCheck(name);
+      this.totalNoTasks++;
+      return;
+    } else if (toolCheck !== null) {
+      run.log(`check-tool: ${toolCheck} potential new tasks — proceeding`);
+    }
+
     // Extract code directory from connector context
     const cwdMatch = content.match(/code directory:\s*(.+)/);
     const taskCwd = cwdMatch?.[1]?.trim();
@@ -713,6 +724,12 @@ export class Orchestrator {
         run.log("result: no new tasks");
         this.totalNoTasks++;
         await this.appendAuditCheck(name);
+
+        // Learn: generate a check tool so future polls can skip the LLM
+        this.maybeGenerateCheckTool(name, content, auditLog, current.output).catch((err) => {
+          console.warn(`[${name}] check tool generation failed (non-fatal):`, err instanceof Error ? err.message : err);
+        });
+
         console.log(run.summary("no tasks"));
       } else {
         let completed = parseTaskCompleted(current.output);
@@ -1474,6 +1491,83 @@ export class Orchestrator {
       agent_output: agentOutput.slice(0, 20_000),
       connector_content: connectorContent,
     });
+  }
+
+  // ── Generated Check Tools (learn to skip LLM) ─────────
+
+  private checkToolPath(connectorName: string): string {
+    return resolve(this.config.vaultPath, `tools/_check_${connectorName}.sh`);
+  }
+
+  /**
+   * Run a previously-generated check tool for a connector.
+   * Returns: number (task count), or null if no tool / tool failed.
+   */
+  private async runGeneratedCheckTool(connectorName: string): Promise<number | null> {
+    const toolPath = this.checkToolPath(connectorName);
+    try {
+      await stat(toolPath);
+    } catch {
+      return null; // No check tool yet — LLM hasn't learned this pattern
+    }
+
+    try {
+      const output = await this.execCheck(`bash "${toolPath}"`);
+      const count = parseInt(output.trim(), 10);
+      if (isNaN(count)) {
+        console.warn(`[${connectorName}] check tool returned non-numeric output: "${output.trim()}" — ignoring`);
+        return null; // Fall through to LLM
+      }
+      return count;
+    } catch (err) {
+      // Tool failed — fall through to LLM (maybe the tool is stale)
+      console.warn(`[${connectorName}] check tool failed — falling back to LLM:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  /**
+   * After a NO_TASKS_AVAILABLE result, ask the LLM to generate a check tool
+   * so future polls can skip the LLM entirely.
+   * Only generates once — if a tool already exists, skips.
+   */
+  private async maybeGenerateCheckTool(
+    connectorName: string,
+    connectorContent: string,
+    auditLog: string,
+    agentOutput: string,
+  ): Promise<void> {
+    const toolPath = this.checkToolPath(connectorName);
+
+    // Don't regenerate if tool already exists
+    try {
+      await stat(toolPath);
+      return; // Already learned
+    } catch { /* doesn't exist yet — generate it */ }
+
+    console.log(`[${connectorName}] learning: generating check tool to avoid future LLM calls...`);
+    try {
+      const result = await spawn(this.config, "tool-gen", {
+        connector_content: connectorContent,
+        audit_log_tail: auditLog.split("\n").slice(-30).join("\n"),
+        agent_summary: agentOutput.slice(0, 3000),
+        audit_path: resolve(this.config.vaultPath, `thinkops/audit/${connectorName}.md`),
+        connector_name: connectorName,
+      });
+
+      // Extract bash script from output
+      const scriptMatch = result.output.match(/```bash\n([\s\S]*?)```/);
+      if (!scriptMatch) {
+        console.warn(`[${connectorName}] tool-gen did not produce a valid script`);
+        return;
+      }
+
+      const script = scriptMatch[1];
+      await writeFile(toolPath, script, { mode: 0o755 });
+      console.log(`[${connectorName}] check tool saved: ${toolPath}`);
+    } catch (err) {
+      console.error(`[${connectorName}] tool-gen failed:`, err);
+    }
   }
 
   private startToolLoop(): void {
