@@ -41,6 +41,10 @@ export function startDashboard(orchestrator: Orchestrator, config: Config): void
         const skills = await orchestrator.getSkills();
         return jsonResponse(res, skills);
       }
+      if (path === "/api/tasks") {
+        const tasks = await orchestrator.getAllTasks();
+        return jsonResponse(res, tasks);
+      }
       if (path === "/api/events") {
         return handleSSE(res, orchestrator);
       }

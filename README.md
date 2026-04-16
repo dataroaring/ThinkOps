@@ -142,6 +142,7 @@ You can also run without global install via `npm run dev`.
 Real-time web dashboard at `http://localhost:3120` with left sidebar navigation:
 
 - **Overview**: uptime, completed tasks, active agents, concurrency gauge
+- **Tasks**: all handled tasks (done/attempted) with quality scores, filterable by connector and status
 - **Connectors**: per-connector stats, poll counts, audit logs
 - **Tools**: generated and extracted tool scripts
 - **Skills**: learned skills with hierarchy

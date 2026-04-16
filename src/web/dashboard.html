@@ -264,7 +264,12 @@
   </div>
 
   <div class="nav-section">
-    <div class="nav-section-label">Resources</div>
+    <div class="nav-section-label">Work</div>
+    <div class="nav-item" data-page="tasks">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Tasks
+      <span class="nav-badge" id="navTaskCount">0</span>
+    </div>
     <div class="nav-item" data-page="connectors">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
       Connectors
@@ -356,6 +361,29 @@
       <div id="completionsList" class="completions-list">
         <div class="empty-row">No completed tasks yet</div>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══ Tasks page ═══ -->
+  <div class="page" id="page-tasks">
+    <div class="page-title">Tasks</div>
+    <div class="page-desc">All tasks handled by the system — completed, attempted, and evaluated.</div>
+    <div class="card">
+      <div class="log-controls">
+        <label>Filter:</label>
+        <select id="taskConnFilter"><option value="">All connectors</option></select>
+        <select id="taskStatusFilter">
+          <option value="">All statuses</option>
+          <option value="done">Completed</option>
+          <option value="attempted">Attempted</option>
+        </select>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Time</th><th>Connector</th><th>Status</th><th>Task</th><th>Detail</th><th>Quality</th></tr></thead>
+        <tbody id="tasksBody">
+          <tr><td colspan="6" class="empty-row">Loading tasks...</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -790,6 +818,71 @@
     renderLogs();
   });
 
+  // ── Tasks ──────────────────────────────────
+  var allTasks = [];
+  function refreshTasks() {
+    fetchJSON("/api/tasks", function(tasks) {
+      allTasks = tasks || [];
+      document.getElementById("navTaskCount").textContent = allTasks.length;
+      renderTasks();
+      // Populate connector filter
+      var connFilter = document.getElementById("taskConnFilter");
+      var curVal = connFilter.value;
+      var connNames = [];
+      allTasks.forEach(function(t) { if (connNames.indexOf(t.connector) < 0) connNames.push(t.connector); });
+      connNames.sort();
+      clearChildren(connFilter);
+      var allOpt = el("option", null, "All connectors"); allOpt.value = ""; connFilter.appendChild(allOpt);
+      connNames.forEach(function(n) {
+        var opt = el("option", null, n); opt.value = n;
+        if (n === curVal) opt.selected = true;
+        connFilter.appendChild(opt);
+      });
+    });
+  }
+  function renderTasks() {
+    var connF = document.getElementById("taskConnFilter").value;
+    var statusF = document.getElementById("taskStatusFilter").value;
+    var filtered = allTasks.filter(function(t) {
+      if (connF && t.connector !== connF) return false;
+      if (statusF && t.status !== statusF) return false;
+      return true;
+    });
+    var tbody = document.getElementById("tasksBody");
+    clearChildren(tbody);
+    if (filtered.length === 0) {
+      var tr = el("tr");
+      var td = el("td", "empty-row", "No tasks match the current filter");
+      td.setAttribute("colspan", "6"); tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+    filtered.forEach(function(t) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", t.timestamp ? t.timestamp.slice(5, 16).replace("T", " ") : "\u2014"));
+      tr.appendChild(el("td", null, t.connector));
+      var statusTd = el("td");
+      var sCls = t.status === "done" ? "badge badge-green" : t.status === "eval" ? "badge badge-blue" : "badge badge-red";
+      var sLabel = t.status === "done" ? "Done" : t.status === "eval" ? "Eval" : "Attempted";
+      statusTd.appendChild(el("span", sCls, sLabel));
+      tr.appendChild(statusTd);
+      var taskTd = el("td");
+      if (t.taskId) taskTd.appendChild(el("span", "mono", t.taskId));
+      if (t.title) taskTd.appendChild(el("span", "task-title", t.title));
+      tr.appendChild(taskTd);
+      tr.appendChild(el("td", null, t.detail || "\u2014"));
+      var qualTd = el("td");
+      if (t.quality) {
+        var n = parseInt(t.quality, 10);
+        var qCls = n >= 8 ? "quality-high" : n >= 5 ? "quality-mid" : "quality-low";
+        qualTd.appendChild(el("span", qCls, t.quality + "/10"));
+      } else { qualTd.textContent = "\u2014"; }
+      tr.appendChild(qualTd);
+      tbody.appendChild(tr);
+    });
+  }
+  document.getElementById("taskConnFilter").addEventListener("change", renderTasks);
+  document.getElementById("taskStatusFilter").addEventListener("change", renderTasks);
+
   // ── Completions ────────────────────────────
   function addCompletion(event) {
     completions.unshift(event);
@@ -839,7 +932,7 @@
       try {
         var event = JSON.parse(e.data);
         addLogEntry(event);
-        if (event.type === "summary") { addCompletion(event); refreshStatus(); refreshAgents(); refreshConnectors(); }
+        if (event.type === "summary") { addCompletion(event); refreshStatus(); refreshAgents(); refreshConnectors(); refreshTasks(); }
         else if (event.type === "completed" || event.type === "phase" || event.type === "rate_limited") {
           refreshStatus(); refreshAgents();
           if (event.type === "completed") refreshConnectors();
@@ -866,10 +959,10 @@
   });
 
   // ── Init ───────────────────────────────────
-  refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); refreshTools(); refreshSkills();
+  refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); refreshTools(); refreshSkills(); refreshTasks();
   connectSSE();
   setInterval(function() { refreshStatus(); refreshAgents(); refreshConnectors(); refreshLoops(); }, 10000);
-  setInterval(function() { refreshTools(); refreshSkills(); }, 60000);
+  setInterval(function() { refreshTools(); refreshSkills(); refreshTasks(); }, 60000);
 })();
 </script>
 </body>

@@ -214,6 +214,70 @@ export class Orchestrator {
     return stats;
   }
 
+  /** Get all tasks (DONE + ATTEMPTED) across all connectors for the dashboard. */
+  async getAllTasks(): Promise<{
+    connector: string;
+    timestamp: string;
+    status: "done" | "attempted" | "eval";
+    taskId: string;
+    title: string;
+    detail: string;
+    quality?: string;
+  }[]> {
+    const auditDir = resolve(this.config.vaultPath, "thinkops/audit");
+    const tasks: {
+      connector: string; timestamp: string; status: "done" | "attempted" | "eval";
+      taskId: string; title: string; detail: string; quality?: string;
+    }[] = [];
+
+    let files: string[];
+    try { files = (await readdir(auditDir)).filter(f => f.endsWith(".md")); }
+    catch { return []; }
+
+    for (const file of files) {
+      const connector = file.replace(/\.md$/, "");
+      try {
+        const content = await readFile(resolve(auditDir, file), "utf-8");
+        const evalScores = new Map<string, string>();
+
+        // First pass: collect eval scores
+        for (const line of content.split("\n")) {
+          if (!line.includes("| EVAL |")) continue;
+          const id = line.match(/\*\*(.+?)\*\*/)?.[1];
+          const quality = line.match(/quality:\s*(\d+)/)?.[1];
+          if (id && quality) evalScores.set(id, quality);
+        }
+
+        // Second pass: collect DONE and ATTEMPTED entries
+        for (const line of content.split("\n")) {
+          if (!line.startsWith("- ")) continue;
+          const parts = line.slice(2).split(" | ");
+          if (parts.length < 3) continue;
+
+          const timestamp = parts[0].trim();
+          const type = parts[1].replace(/\*/g, "").trim();
+
+          if (type === "DONE") {
+            const taskId = parts[2]?.replace(/\*/g, "").trim() ?? "";
+            const title = parts[3]?.trim() ?? "";
+            const detail = parts[4]?.trim() ?? "";
+            tasks.push({ connector, timestamp, status: "done", taskId, title, detail,
+              quality: evalScores.get(taskId) });
+          } else if (type === "ATTEMPTED") {
+            const reason = parts[2]?.trim() ?? "";
+            const snippet = parts[3]?.trim() ?? "";
+            tasks.push({ connector, timestamp, status: "attempted", taskId: "",
+              title: reason, detail: snippet });
+          }
+        }
+      } catch { /* skip unreadable */ }
+    }
+
+    // Sort newest first
+    tasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return tasks;
+  }
+
   /** Get background loop stats for the dashboard. */
   getLoopStats(): LoopState[] {
     return [...this.loopStates.values()];
