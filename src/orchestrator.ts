@@ -1126,9 +1126,22 @@ export class Orchestrator {
     const dir = resolve(this.config.vaultPath, "connectors");
     try {
       const files = await readdir(dir);
-      return files
+      const candidates = files
         .filter((f) => f.endsWith(".md") && !f.startsWith("_"))
         .map((f) => ({ name: f.replace(".md", ""), path: join(dir, f) }));
+
+      // Filter out files that aren't real connectors (too small, or look like misplaced audit logs)
+      const valid: { name: string; path: string }[] = [];
+      for (const c of candidates) {
+        try {
+          const content = await readFile(c.path, "utf-8");
+          // Skip empty/trivial files and misplaced audit logs
+          if (content.trim().length < 20) continue;
+          if (content.trim().startsWith("- ") && content.includes("| CHECKED |")) continue;
+        } catch { continue; }
+        valid.push(c);
+      }
+      return valid;
     } catch {
       return [];
     }
