@@ -647,6 +647,17 @@ export class Orchestrator {
     poll();
   }
 
+  /** Apply exponential backoff for auth failures (reuses the rate-limit backoff map). */
+  private applyAuthBackoff(name: string, run: RunLog): void {
+    run.warn("auth failure — applying backoff, skipping recovery pipeline");
+    const existing = this.rateLimitBackoff.get(name);
+    const delay = existing ? Math.min(existing.delay * 2, this.BACKOFF_MAX) : this.BACKOFF_INITIAL;
+    const until = Date.now() + delay;
+    this.rateLimitBackoff.set(name, { until, delay });
+    this.emitEvent({ type: "rate_limited", connector: name, timestamp: Date.now(),
+      message: `Auth failure, backing off ${Math.round(delay / 60000)}min`, backoffUntil: until });
+  }
+
   /** Shrink interval after finding tasks (reset to minimum). */
   private pollFaster(name: string): void {
     this.connectorIntervals.set(name, this.POLL_MIN_MS);
@@ -767,6 +778,12 @@ export class Orchestrator {
 
       const preflightOutput = preflight.output;
       run.log(`pre-flight done (in: ${preflight.inputChars}c, out: ${preflightOutput.length}c)`);
+
+      // Auth failure in preflight — bail before any LLM work
+      if (isAuthFailure(preflightOutput)) {
+        this.applyAuthBackoff(name, run);
+        return;
+      }
 
       // Record preflight actions for pattern detection
       if (preflight.actions?.length) {
@@ -927,6 +944,12 @@ export class Orchestrator {
       }
     }
 
+    // Auth failure detection — skip recovery pipeline entirely
+    if (isAuthFailure(current.output)) {
+      this.applyAuthBackoff(connectorName, run);
+      return;
+    }
+
     // Rate limit detection
     if (isRateLimited(current.output)) {
       run.warn("rate limit detected — applying backoff");
@@ -995,6 +1018,8 @@ export class Orchestrator {
       this.pollSlower(name);
       await this.appendAuditCheck(name);
       console.log(run.summary("no tasks"));
+    } else if (isAuthFailure(current.output)) {
+      this.applyAuthBackoff(name, run);
     } else {
       const completed = parseTaskCompleted(current.output);
       if (completed) {
@@ -1095,6 +1120,7 @@ export class Orchestrator {
     run.warn("agent finished without TASK_COMPLETED or NO_TASKS_AVAILABLE");
     const maxAttempts = this.config.maxRecoveryAttempts;
     let recovered = false;
+    let abandoned = false;
     let completed: { id: string; title: string; result: string; dispositions?: string } | null = null;
 
     for (let attempt = 1; attempt <= maxAttempts && current.sessionId; attempt++) {
@@ -1129,13 +1155,14 @@ export class Orchestrator {
         run.log(`recovery: ABANDON — ${decision.analysis}`);
         await this.appendAuditAttempted(name, `abandoned: ${decision.analysis}`, current.output);
         this.emitEvent({ type: "log", connector: name, message: `Abandoned: ${decision.analysis}`, level: "error", timestamp: Date.now() });
+        abandoned = true;
         break;
       }
     }
 
     if (recovered && completed) {
       await this.handleCompleted(name, connectorContent, completed, current, run);
-    } else if (!recovered && maxAttempts > 0) {
+    } else if (!recovered && !abandoned && maxAttempts > 0) {
       await this.appendAuditAttempted(name, "recovery exhausted", current.output);
       console.log(run.summary("recovery exhausted"));
     } else {
@@ -2071,6 +2098,17 @@ const RATE_LIMIT_PATTERNS = [
 
 function isRateLimited(output: string): boolean {
   return RATE_LIMIT_PATTERNS.some((p) => p.test(output));
+}
+
+const AUTH_FAILURE_PATTERNS = [
+  /not logged in/i,
+  /API Error: 403/i,
+  /Request not allowed/i,
+  /Failed to authenticate/i,
+];
+
+function isAuthFailure(output: string): boolean {
+  return AUTH_FAILURE_PATTERNS.some((p) => p.test(output));
 }
 
 /** Keep the last N lines of a string. */

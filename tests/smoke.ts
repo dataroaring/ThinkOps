@@ -278,6 +278,23 @@ code directory: /tmp/my-project
   assert(isRateLimited("usage limit reached"), "Detects 'usage limit'");
   assert(!isRateLimited("Task completed successfully"), "Does not false-positive on normal output");
 
+  // Test auth failure detection patterns
+  const authFailurePatterns = [
+    /not logged in/i,
+    /API Error: 403/i,
+    /Request not allowed/i,
+    /Failed to authenticate/i,
+  ];
+  function isAuthFailure(output: string): boolean {
+    return authFailurePatterns.some((p) => p.test(output));
+  }
+  assert(isAuthFailure("Not logged in"), "Detects 'Not logged in'");
+  assert(isAuthFailure("API Error: 403 {\"error\":{\"type\":\"forbidden\"}}"), "Detects 'API Error: 403'");
+  assert(isAuthFailure("Request not allowed by server"), "Detects 'Request not allowed'");
+  assert(isAuthFailure("Failed to authenticate. Please login."), "Detects 'Failed to authenticate'");
+  assert(!isAuthFailure("Task completed successfully"), "Does not false-positive auth on normal output");
+  assert(!isAuthFailure("Rate limit exceeded"), "Does not conflate auth failure with rate limit");
+
   // Test audit log write + read
   const auditDir = resolve(TEST_DIR, "thinkops/audit");
   await mkdir(auditDir, { recursive: true });
