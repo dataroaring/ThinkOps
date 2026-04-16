@@ -21,3 +21,9 @@ Results: 82 passed, 0 failed
 ──────────────────────
 [enhance] 2026-04-16 06:32:47 Tests confirmed passing.
 [enhance] 2026-04-16 06:32:47 Committing changes...
+[feat/task-completed-dispositions fe2b397] Enhance: Detect auth failures in task-critique and eval-run outputs — log warning and skip instead of silently recording "quality: ?/10"
+ 3 files changed, 20 insertions(+), 11 deletions(-)
+[enhance] 2026-04-16 06:32:47 Pushing to remote...
+To https://github.com/dataroaring/ThinkOps.git
+   87605f7..fe2b397  feat/task-completed-dispositions -> feat/task-completed-dispositions
+[enhance] 2026-04-16 06:32:49 Cycle complete: [EVAL_SKIPPED] committed and pushed.

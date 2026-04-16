@@ -39,6 +39,41 @@ append_log() {
   echo "- $(ts) | $1 | $2" >> "$ENHANCE_LOG"
 }
 
+# ── Step 0: Ensure we're on main, merge branches ahead ──
+
+ORIG_BRANCH=$(git branch --show-current 2>/dev/null)
+if [[ "$ORIG_BRANCH" != "main" ]]; then
+  log "Switching to main (was on $ORIG_BRANCH)..."
+  # Stash any uncommitted changes so checkout doesn't fail
+  git stash --include-untracked -q 2>/dev/null || true
+  git checkout main 2>/dev/null || { log "ERROR: Cannot checkout main"; exit 1; }
+fi
+
+git fetch --all --prune 2>/dev/null || true
+
+# Merge all local branches that are ahead of main
+for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v '^main$'); do
+  # Check if branch has commits ahead of main
+  AHEAD=$(git rev-list --count main.."$branch" 2>/dev/null || echo 0)
+  if [[ "$AHEAD" -gt 0 ]]; then
+    log "Merging '$branch' ($AHEAD commits ahead) into main..."
+    if git merge "$branch" --no-edit 2>&1; then
+      log "Merged '$branch' into main."
+    else
+      log "ERROR: Merge conflict with '$branch'. Aborting merge."
+      git merge --abort 2>/dev/null || true
+      append_log "MERGE_FAILED" "Conflict merging $branch into main"
+    fi
+  fi
+done
+
+# Also pull remote main if behind
+BEHIND_REMOTE=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+if [[ "$BEHIND_REMOTE" -gt 0 ]]; then
+  log "Main is $BEHIND_REMOTE commits behind origin/main. Pulling..."
+  git pull --no-edit 2>&1 | tail -3
+fi
+
 # ── Step 1: Gather state ────────────────────────
 
 log "Gathering ThinkOps state..."
@@ -170,8 +205,8 @@ Co-Authored-By: Claude Sonnet <noreply@anthropic.com>
 EOF
   )" 2>&1 | tail -3
 
-  log "Pushing to remote..."
-  git push 2>&1 | tail -3
+  log "Pushing main to remote..."
+  git push origin main 2>&1 | tail -3
 
   append_log "DONE" "[$ISSUE] $SUMMARY | files: $FILES | committed+pushed"
   log "Cycle complete: [$ISSUE] committed and pushed."
