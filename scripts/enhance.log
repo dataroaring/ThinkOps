@@ -1,22 +1,23 @@
-[enhance] 2026-04-16 06:28:19 Gathering ThinkOps state...
-[enhance] 2026-04-16 06:28:22 Issues found:
+[enhance] 2026-04-16 06:31:19 Gathering ThinkOps state...
+[enhance] 2026-04-16 06:31:22 Issues found:
   - **AUTH_FAILURE_LOOP**: 8 auth-403 + 55 not-logged-in errors in last 200 lines.
   - **EVAL_SKIPPED**: 1 audit files have tasks with 'quality: ?/10'.
   - **DUPLICATE_AUDIT_ENTRIES**: 129 abandoned + 130 recovery-exhausted entries.
   - **EMPTY_CONNECTOR**: 'jira' is only 0B — still being polled.
   - **EMPTY_CONNECTOR**: 'obsidian' is only 68B — still being polled.
-[enhance] 2026-04-16 06:28:22 Enhancement history (last 5):
+[enhance] 2026-04-16 06:31:22 Enhancement history (last 5):
   - 2026-04-16 06:13:58 | DRY_RUN | Issues detected but --dry-run specified
   - 2026-04-16 06:19:26 | DONE | [AUTH_FAILURE_LOOP] Add auth failure detection with exponential backoff at preflight, connector-run, and single-task phases | files: src/orchestrator.ts, tests/smoke.ts
-[enhance] 2026-04-16 06:28:22 Spawning Claude Code to implement fix...
-[enhance] 2026-04-16 06:29:13 Fix applied: [DUPLICATE_AUDIT_ENTRIES] Track abandoned state in handleRecovery() to prevent double-logging both "abandoned" and "recovery exhausted" for the same failure
-[enhance] 2026-04-16 06:29:13 Files: src/orchestrator.ts
-[enhance] 2026-04-16 06:29:13 Tests: pass
-[enhance] 2026-04-16 06:29:13 Verifying tests...
+  - 2026-04-16 06:29:16 | DONE | [DUPLICATE_AUDIT_ENTRIES] Track abandoned state in handleRecovery() to prevent double-logging both "abandoned" and "recovery exhausted" for the same failure | files: src/orchestrator.ts | committed+pushed
+[enhance] 2026-04-16 06:31:22 Spawning Claude Code to implement fix...
+[enhance] 2026-04-16 06:32:46 Fix applied: [EVAL_SKIPPED] Detect auth failures in task-critique and eval-run outputs — log warning and skip instead of silently recording "quality: ?/10"
+[enhance] 2026-04-16 06:32:46 Files: src/orchestrator.ts
+[enhance] 2026-04-16 06:32:46 Tests: pass
+[enhance] 2026-04-16 06:32:46 Verifying tests...
   ✓ Format includes repeat count
 
 ──────────────────────
 Results: 82 passed, 0 failed
 ──────────────────────
-[enhance] 2026-04-16 06:29:14 Tests confirmed passing.
-[enhance] 2026-04-16 06:29:14 Committing changes...
+[enhance] 2026-04-16 06:32:47 Tests confirmed passing.
+[enhance] 2026-04-16 06:32:47 Committing changes...

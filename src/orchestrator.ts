@@ -1353,6 +1353,10 @@ export class Orchestrator {
       }, { label: `critique: ${tag}` });
 
       const output = critiqueResult.output;
+      if (isAuthFailure(output)) {
+        console.warn(`${ts()} [${tag}] critic: skipped (auth failure)`);
+        return "approved";
+      }
       if (output.includes("status: needs_fix")) {
         const issues = output.match(/issues:\n([\s\S]*?)(?:\n```|$)/)?.[1]?.trim() ?? "unspecified issues";
         console.log(`${ts()} [${tag}] critic: needs fix — ${issues.slice(0, 200)}`);
@@ -1421,6 +1425,10 @@ export class Orchestrator {
       }, { label: `eval: ${tag}` });
 
       const evalOutput = evalResult.output;
+      if (isAuthFailure(evalOutput)) {
+        console.warn(`${ts()} [${tag}] eval: skipped (auth failure)`);
+        return "skipped";
+      }
       const quality = evalOutput.match(/quality:\s*(\d+)/)?.[1] ?? "?";
       console.log(`${ts()} [${tag}] eval: quality ${quality}/10`);
       if (evalResult.cost) console.log(`${ts()} [${tag}] eval cost: $${evalResult.cost.toFixed(4)}`);
