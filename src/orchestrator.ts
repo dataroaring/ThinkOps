@@ -1226,8 +1226,8 @@ export class Orchestrator {
       for (const c of candidates) {
         try {
           const content = await readFile(c.path, "utf-8");
-          // Skip empty/trivial files and misplaced audit logs
-          if (content.trim().length < 20) continue;
+          // Skip empty/trivial files (< 100 bytes) and misplaced audit logs
+          if (content.trim().length < 100) continue;
           if (content.trim().startsWith("- ") && content.includes("| CHECKED |")) continue;
         } catch { continue; }
         valid.push(c);
