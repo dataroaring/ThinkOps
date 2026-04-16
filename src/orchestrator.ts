@@ -1491,7 +1491,10 @@ export class Orchestrator {
   private async loadSkillContext(taskDescription: string): Promise<string> {
     try {
       const treePath = resolve(this.config.vaultPath, "skills/_tree.md");
-      await stat(treePath);
+      const treeContent = await readFile(treePath, "utf-8");
+      if (treeContent.trim().length < 50) {
+        return "No skills available yet.";
+      }
     } catch {
       return "No skills available yet.";
     }
