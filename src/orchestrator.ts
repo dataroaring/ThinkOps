@@ -643,6 +643,13 @@ export class Orchestrator {
 
     const content = await readFile(path, "utf-8");
 
+    // Skip empty or trivially small connectors — nothing useful to do
+    if (content.trim().length < 20) {
+      run.log("connector too small / empty — skipping");
+      this.pollSlower(name);
+      return;
+    }
+
     // Cheap change detection: run ## Check command before any LLM call
     const changed = await this.runCheapCheck(name, content);
     if (!changed) {
@@ -768,6 +775,7 @@ export class Orchestrator {
       }
     } catch (err) {
       run.error("run failed", err);
+      this.pollSlower(name); // Back off on errors
     } finally {
       this.activeAgents.delete(name);
       this.releaseSlot(name);
@@ -832,21 +840,24 @@ export class Orchestrator {
     }, { cwd, label: `${connectorName}/${subtask.id}` });
     this.emitEvent({ type: "log", connector: connectorName, message: `Execute done (in: ${fmtChars(result.inputChars)}, out: ${fmtChars(result.outputChars)})`, level: "info", timestamp: Date.now(), inputChars: result.inputChars, outputChars: result.outputChars });
 
-    // Handle human input loop
+    // Handle human input loop — release slot while waiting so other connectors can run
     let current = result;
     while (current.humanInputNeeded) {
       run.startPhase("human-input");
       this.setPhase(connectorName, "human-input");
       run.log(`waiting for human: ${current.humanInputNeeded}`);
+      this.releaseSlot(connectorName); // Don't block others while waiting
       try {
         const answer = await this.bot.askQuestion(current.humanInputNeeded);
-        run.log(`user replied, resuming session ${current.sessionId}`);
+        run.log(`user replied, re-acquiring slot...`);
+        if (!(await this.acquireSlot(connectorName))) return;
         run.startPhase("execute (resumed)");
         this.setPhase(connectorName, "execute (resumed)");
         current = await resume(this.config, current.sessionId,
           `The user answered: ${answer}\n\nPlease continue executing the task.`);
       } catch (err) {
         run.error("Q&A timed out", err);
+        if (!(await this.acquireSlot(connectorName))) return; // Re-acquire for finally block
         this.bot.notify(`[${connectorName}] timed out waiting for input.`).catch(() => {});
         break;
       }
