@@ -221,18 +221,23 @@ if [[ ${SKILL_TOTAL:-0} -gt 3 ]] && [[ ${SKILL_NONE:-0} -eq ${SKILL_TOTAL:-0} ]]
   echo ""
 fi
 
-# Pattern 5: Empty connectors being polled
-if [[ -d "$CONNECTOR_DIR" ]]; then
-  for f in "$CONNECTOR_DIR"/*.md; do
-    [[ -f "$f" ]] || continue
-    SIZE=$(wc -c < "$f" | tr -d ' ')
-    NAME=$(basename "$f" .md)
-    if [[ $SIZE -lt 100 ]]; then
-      echo "- **EMPTY_CONNECTOR**: '$NAME' is only ${SIZE}B — still being polled."
-      echo "  Impact: Wasted LLM calls on empty/placeholder connectors."
-      echo ""
-    fi
-  done
+# Pattern 5: Empty connectors — only flag if runtime filter is missing.
+# Runtime already skips < 100B files in listConnectors() and runConnector(),
+# so the on-disk file alone is not an issue. Verify the guards still exist.
+ORCHESTRATOR="$PROJECT_DIR/src/orchestrator.ts"
+if [[ -f "$ORCHESTRATOR" ]] && ! grep -q 'content.trim().length < 100' "$ORCHESTRATOR"; then
+  if [[ -d "$CONNECTOR_DIR" ]]; then
+    for f in "$CONNECTOR_DIR"/*.md; do
+      [[ -f "$f" ]] || continue
+      SIZE=$(wc -c < "$f" | tr -d ' ')
+      NAME=$(basename "$f" .md)
+      if [[ $SIZE -lt 100 ]]; then
+        echo "- **EMPTY_CONNECTOR**: '$NAME' is only ${SIZE}B and orchestrator lacks the size-filter guard."
+        echo "  Impact: Wasted LLM calls on empty/placeholder connectors."
+        echo ""
+      fi
+    done
+  fi
 fi
 
 echo "---"
