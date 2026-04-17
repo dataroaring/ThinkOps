@@ -198,13 +198,18 @@ if [[ -f "$ORCHESTRATOR" ]] && ! grep -q 'applyAuthBackoff' "$ORCHESTRATOR"; the
   fi
 fi
 
-# Pattern 2: Eval quality scores missing
-MISSING_EVAL=$(grep -l 'quality: ?/10' "$AUDIT_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
-if [[ ${MISSING_EVAL:-0} -gt 0 ]]; then
-  echo "- **EVAL_SKIPPED**: $MISSING_EVAL audit files have tasks with 'quality: ?/10'."
-  echo "  Eval/critique phases are failing (likely auth) but tasks still marked DONE."
-  echo "  Impact: No quality feedback loop — the system can't learn from its own work."
-  echo ""
+# Pattern 2: Eval quality scores missing.
+# Runtime guard `isAuthFailure(evalOutput)` short-circuits eval/critique on auth
+# failures and returns "skipped" instead of writing `quality: ?/10`. Only flag when
+# the guard is missing from src/orchestrator.ts.
+if [[ -f "$ORCHESTRATOR" ]] && ! grep -q 'isAuthFailure(evalOutput)' "$ORCHESTRATOR"; then
+  MISSING_EVAL=$(grep -l 'quality: ?/10' "$AUDIT_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  if [[ ${MISSING_EVAL:-0} -gt 0 ]]; then
+    echo "- **EVAL_SKIPPED**: $MISSING_EVAL audit files have tasks with 'quality: ?/10'."
+    echo "  Eval/critique phases are failing (likely auth) but tasks still marked DONE."
+    echo "  Impact: No quality feedback loop — the system can't learn from its own work."
+    echo ""
+  fi
 fi
 
 # Pattern 3: Duplicate audit entries.
