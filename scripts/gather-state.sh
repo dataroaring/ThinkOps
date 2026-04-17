@@ -207,14 +207,19 @@ if [[ ${MISSING_EVAL:-0} -gt 0 ]]; then
   echo ""
 fi
 
-# Pattern 3: Duplicate audit entries
-DUPES=$(grep -c 'recovery exhausted' "$AUDIT_DIR"/*.md 2>/dev/null | awk -F: '{s+=$2} END {print s}')
-ABANDONS=$(grep -c 'abandoned:' "$AUDIT_DIR"/*.md 2>/dev/null | awk -F: '{s+=$2} END {print s}')
-if [[ ${DUPES:-0} -gt 5 ]] && [[ ${ABANDONS:-0} -gt 5 ]]; then
-  echo "- **DUPLICATE_AUDIT_ENTRIES**: $ABANDONS abandoned + $DUPES recovery-exhausted entries."
-  echo "  Each failure logs both 'abandoned' and 'recovery exhausted' on the same timestamp."
-  echo "  Impact: Audit log noise, inflated failure counts."
-  echo ""
+# Pattern 3: Duplicate audit entries.
+# Runtime guard tracks `abandoned` in handleRecovery to skip the "recovery exhausted"
+# log when "abandoned:" was already written for the same failure. Only flag when the
+# guard is missing from src/orchestrator.ts.
+if [[ -f "$ORCHESTRATOR" ]] && ! grep -q '!recovered && !abandoned' "$ORCHESTRATOR"; then
+  DUPES=$(grep -c 'recovery exhausted' "$AUDIT_DIR"/*.md 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+  ABANDONS=$(grep -c 'abandoned:' "$AUDIT_DIR"/*.md 2>/dev/null | awk -F: '{s+=$2} END {print s}')
+  if [[ ${DUPES:-0} -gt 5 ]] && [[ ${ABANDONS:-0} -gt 5 ]]; then
+    echo "- **DUPLICATE_AUDIT_ENTRIES**: $ABANDONS abandoned + $DUPES recovery-exhausted entries."
+    echo "  Each failure logs both 'abandoned' and 'recovery exhausted' on the same timestamp."
+    echo "  Impact: Audit log noise, inflated failure counts."
+    echo ""
+  fi
 fi
 
 # Pattern 4: Skill-select always returns NONE
