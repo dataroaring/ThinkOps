@@ -184,12 +184,18 @@ section "Detected Issue Patterns"
 echo "The following issues are detected automatically from the state above:"
 echo ""
 
-# Pattern 1: Auth failures not circuit-broken
-if [[ ${AUTH_403:-0} -gt 5 ]] || [[ ${NOT_LOGGED:-0} -gt 5 ]]; then
-  echo "- **AUTH_FAILURE_LOOP**: $AUTH_403 auth-403 + $NOT_LOGGED not-logged-in errors in last 200 lines."
-  echo "  The orchestrator lacks a circuit breaker for authentication failures."
-  echo "  Impact: Endless retry loop burning time, cluttering audit logs."
-  echo ""
+# Pattern 1: Auth failures not circuit-broken.
+# Runtime guard `applyAuthBackoff` already short-circuits the recovery pipeline
+# on auth failures, so the on-disk error count alone is not an issue. Only flag
+# when the guard is missing from src/orchestrator.ts.
+ORCHESTRATOR="$PROJECT_DIR/src/orchestrator.ts"
+if [[ -f "$ORCHESTRATOR" ]] && ! grep -q 'applyAuthBackoff' "$ORCHESTRATOR"; then
+  if [[ ${AUTH_403:-0} -gt 5 ]] || [[ ${NOT_LOGGED:-0} -gt 5 ]]; then
+    echo "- **AUTH_FAILURE_LOOP**: $AUTH_403 auth-403 + $NOT_LOGGED not-logged-in errors in last 200 lines."
+    echo "  The orchestrator lacks a circuit breaker for authentication failures."
+    echo "  Impact: Endless retry loop burning time, cluttering audit logs."
+    echo ""
+  fi
 fi
 
 # Pattern 2: Eval quality scores missing
