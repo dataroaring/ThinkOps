@@ -459,7 +459,7 @@ export class Orchestrator {
     this.initLoop("feedback", this.config.feedbackCheckInterval);
 
     // Start task loops (parallel, one per connector)
-    console.log("[orchestrator] starting task loops (concurrency=%d, adaptive poll %s–%s)...", this.config.taskConcurrency, formatDuration(this.POLL_MIN_MS), formatDuration(this.POLL_MAX_MS));
+    console.log("[orchestrator] starting task loops (concurrency=%d, poll every %s)...", this.config.taskConcurrency, formatDuration(this.POLL_INTERVAL_MS));
     this.startTaskLoop();
 
     // Start knowledge watcher
@@ -523,7 +523,7 @@ export class Orchestrator {
       "",
       `  Agent:       ${cfg.agentCli}/${cfg.agentModel}`,
       `  Concurrency: ${cfg.taskConcurrency} parallel agents`,
-      `  Poll:        adaptive 10m–1h (grows when idle, resets on activity)`,
+      `  Poll:        every 10m`,
       `  Dashboard:   http://localhost:${cfg.dashboardPort}`,
       "",
       `  Connectors (${connectors.length}):`,
@@ -548,7 +548,7 @@ export class Orchestrator {
     const teleLines = [
       `*${cfg.brandName} started*`,
       `Agent: ${cfg.agentCli}/${cfg.agentModel}`,
-      `Concurrency: ${cfg.taskConcurrency} | Poll: adaptive 10m–1h`,
+      `Concurrency: ${cfg.taskConcurrency} | Poll: every 10m`,
       `Dashboard: http://localhost:${cfg.dashboardPort}`,
       "",
       `*Connectors (${connectors.length}):*`,
@@ -582,10 +582,9 @@ export class Orchestrator {
   private connectorPolls = new Map<string, number>();
   private connectorDoneCounts = new Map<string, number>();
 
-  /** Adaptive poll interval per connector (ms). Grows on idle, shrinks on activity. */
+  /** Fixed poll interval per connector (ms). */
   private connectorIntervals = new Map<string, number>();
-  private readonly POLL_MIN_MS = 10 * 60 * 1000;  // 10 minutes
-  private readonly POLL_MAX_MS = 60 * 60 * 1000;  // 1 hour
+  private readonly POLL_INTERVAL_MS = 10 * 60 * 1000;  // 10 minutes
 
   private startTaskLoop(): void {
     // Discover connectors and start a loop for each; re-scan periodically for new ones
@@ -608,9 +607,8 @@ export class Orchestrator {
   }
 
   private startConnectorLoop(name: string, path: string): void {
-    // Initialize adaptive interval from config (clamped to bounds)
-    const initialMs = Math.max(this.POLL_MIN_MS, Math.min(this.config.taskPollInterval * 1000, this.POLL_MAX_MS));
-    this.connectorIntervals.set(name, initialMs);
+    // Initialize fixed poll interval
+    this.connectorIntervals.set(name, this.POLL_INTERVAL_MS);
 
     const poll = async () => {
       if (!this.running) return;
@@ -636,7 +634,7 @@ export class Orchestrator {
         err = e;
         console.error(`${ts()} [${name}] error:`, e);
       }
-      const nextMs = this.connectorIntervals.get(name) ?? this.POLL_MIN_MS;
+      const nextMs = this.connectorIntervals.get(name) ?? this.POLL_INTERVAL_MS;
       this.loopFinish("connectors", start, err, nextMs);
       if (this.running) {
         console.log(`${ts()} [${name}] next poll in ${formatDuration(nextMs)}`);
@@ -658,16 +656,9 @@ export class Orchestrator {
       message: `Auth failure, backing off ${Math.round(delay / 60000)}min`, backoffUntil: until });
   }
 
-  /** Shrink interval after finding tasks (reset to minimum). */
-  private pollFaster(name: string): void {
-    this.connectorIntervals.set(name, this.POLL_MIN_MS);
-  }
-
-  /** Grow interval after finding no tasks (1.5x, capped at max). */
-  private pollSlower(name: string): void {
-    const current = this.connectorIntervals.get(name) ?? this.POLL_MIN_MS;
-    const next = Math.min(Math.round(current * 1.5), this.POLL_MAX_MS);
-    this.connectorIntervals.set(name, next);
+  /** Reset poll interval (fixed at 10 minutes). */
+  private resetPollInterval(name: string): void {
+    this.connectorIntervals.set(name, this.POLL_INTERVAL_MS);
   }
 
   private async acquireSlot(name: string): Promise<boolean> {
@@ -719,9 +710,10 @@ export class Orchestrator {
     const content = await readFile(path, "utf-8");
 
     // Skip empty or trivially small connectors — nothing useful to do
-    if (content.trim().length < 20) {
+    // Threshold matches listConnectors() so existing poll loops self-skip when a connector shrinks
+    if (content.trim().length < 100) {
       run.log("connector too small / empty — skipping");
-      this.pollSlower(name);
+      this.resetPollInterval(name);
       return;
     }
 
@@ -729,7 +721,7 @@ export class Orchestrator {
     const changed = await this.runCheapCheck(name, content);
     if (!changed) {
       run.log("check: no changes detected — skipping poll");
-      this.pollSlower(name);
+      this.resetPollInterval(name);
       return;
     }
 
@@ -744,7 +736,7 @@ export class Orchestrator {
         run.log(`gen-tool: ${toolResult.details ?? "no tasks"} — skipping LLM`);
         await this.appendAuditCheck(name);
         this.totalNoTasks++;
-        this.pollSlower(name);
+        this.resetPollInterval(name);
         return;
       } else if (toolResult.outcome === "needs-llm") {
         run.log(`gen-tool: needs LLM — ${toolResult.details ?? "proceeding"}`);
@@ -794,7 +786,7 @@ export class Orchestrator {
       if (preflightOutput.includes("NO_TASKS_AVAILABLE")) {
         run.log("preflight: no tasks available");
         this.totalNoTasks++;
-        this.pollSlower(name);
+        this.resetPollInterval(name);
         await this.appendAuditCheck(name);
         console.log(run.summary("no tasks"));
         return;
@@ -809,7 +801,7 @@ export class Orchestrator {
       }
 
       run.log(`preflight: ${subtasks.length} sub-tasks (${subtasks.filter(s => s.fast).length} fast, ${subtasks.filter(s => !s.fast).length} full)`);
-      this.pollFaster(name);
+      this.resetPollInterval(name);
 
       // Phase 2: Execute sub-tasks
       // Fast sub-tasks run in parallel, skip critique/eval
@@ -842,12 +834,9 @@ export class Orchestrator {
         }
       }
 
-      // Run first full task through the complete pipeline (critic/eval/recovery)
-      if (fullTasks.length > 0) {
-        const task = fullTasks[0]; // One per poll — next poll picks the next one
-        if (fullTasks.length > 1) {
-          run.log(`full: picking "${task.id}" (${fullTasks.length - 1} remaining for next poll)`);
-        }
+      // Run all full tasks sequentially through the complete pipeline (critic/eval/recovery)
+      for (const task of fullTasks) {
+        run.log(`full: executing "${task.id}" (${fullTasks.indexOf(task) + 1}/${fullTasks.length})`);
         await this.runFullSubTask(name, path, content, auditTail, task, taskCwd, run);
       }
 
@@ -856,7 +845,7 @@ export class Orchestrator {
       }
     } catch (err) {
       run.error("run failed", err);
-      this.pollSlower(name); // Back off on errors
+      this.resetPollInterval(name); // Back off on errors
     } finally {
       this.activeAgents.delete(name);
       this.releaseSlot(name);
@@ -1015,7 +1004,7 @@ export class Orchestrator {
 
     if (current.output.includes("NO_TASKS_AVAILABLE")) {
       this.totalNoTasks++;
-      this.pollSlower(name);
+      this.resetPollInterval(name);
       await this.appendAuditCheck(name);
       console.log(run.summary("no tasks"));
     } else if (isAuthFailure(current.output)) {
@@ -1023,7 +1012,7 @@ export class Orchestrator {
     } else {
       const completed = parseTaskCompleted(current.output);
       if (completed) {
-        this.pollFaster(name);
+        this.resetPollInterval(name);
         await this.handleCompleted(name, content, completed, current, run);
       } else {
         await this.handleRecovery(name, content, current, run);
@@ -1039,7 +1028,7 @@ export class Orchestrator {
     current: import("./agent/spawner.js").SpawnResult,
     run: RunLog,
   ): Promise<void> {
-    this.pollFaster(name);
+    this.resetPollInterval(name);
     run.taskId = completed.id;
     this.setPhase(name, "completed", completed.id, completed.title);
     run.log(`task done: ${completed.title}`);

@@ -29,6 +29,8 @@ done
 
 cd "$PROJECT_DIR"
 
+SKIP_LIST="$SCRIPT_DIR/.merge-skiplist"  # gitignored: lines of "<branch>\t<sha>"
+
 # ── Helpers ──────────────────────────────────────
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -72,15 +74,21 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep 
   fi
   AHEAD=$(git rev-list --count main.."$branch" 2>/dev/null || echo 0)
   if [[ "$AHEAD" -gt 0 ]]; then
+    BRANCH_SHA=$(git rev-parse "$branch" 2>/dev/null)
+    if [[ -f "$SKIP_LIST" ]] && grep -qF "$(printf '%s\t%s' "$branch" "$BRANCH_SHA")" "$SKIP_LIST"; then
+      log "Skipping '$branch' @ ${BRANCH_SHA:0:7} (previously failed to merge — rebase to retry)."
+      continue
+    fi
     log "Merging '$branch' ($AHEAD commits ahead) into main..."
     if git merge "$branch" --no-edit 2>&1; then
       log "Merged '$branch' into main. Deleting branch."
       git branch -D "$branch" 2>/dev/null || true
       git push origin --delete "$branch" 2>/dev/null || true
     else
-      log "ERROR: Merge conflict with '$branch'. Aborting merge."
+      log "ERROR: Merge conflict with '$branch'. Aborting merge and skip-listing."
       git merge --abort 2>/dev/null || true
-      append_log "MERGE_FAILED" "Conflict merging $branch into main"
+      printf '%s\t%s\n' "$branch" "$BRANCH_SHA" >> "$SKIP_LIST"
+      append_log "MERGE_FAILED" "Conflict merging $branch ($BRANCH_SHA) — added to skip-list"
     fi
   fi
 done
