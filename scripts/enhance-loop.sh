@@ -51,14 +51,32 @@ fi
 
 git fetch --all --prune 2>/dev/null || true
 
-# Merge all local branches that are ahead of main
+# Merge all local branches that are ahead of main, then delete them
 for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v '^main$'); do
-  # Check if branch has commits ahead of main
+  # Skip branches already fully contained in main (by ancestry or by content)
+  if git merge-base --is-ancestor "$branch" main 2>/dev/null; then
+    log "Deleting '$branch' (ancestor of main)."
+    git branch -D "$branch" 2>/dev/null || true
+    git push origin --delete "$branch" 2>/dev/null || true
+    continue
+  fi
+  # If main is ahead of the branch tip, the branch is stale (e.g., rebased)
+  if git merge-base --is-ancestor "$(git merge-base main "$branch")" "$branch" 2>/dev/null; then
+    BEHIND=$(git rev-list --count "$branch"..main 2>/dev/null || echo 0)
+    if [[ "$BEHIND" -gt 0 ]]; then
+      log "Deleting '$branch' (main is $BEHIND commits ahead — stale branch)."
+      git branch -D "$branch" 2>/dev/null || true
+      git push origin --delete "$branch" 2>/dev/null || true
+      continue
+    fi
+  fi
   AHEAD=$(git rev-list --count main.."$branch" 2>/dev/null || echo 0)
   if [[ "$AHEAD" -gt 0 ]]; then
     log "Merging '$branch' ($AHEAD commits ahead) into main..."
     if git merge "$branch" --no-edit 2>&1; then
-      log "Merged '$branch' into main."
+      log "Merged '$branch' into main. Deleting branch."
+      git branch -D "$branch" 2>/dev/null || true
+      git push origin --delete "$branch" 2>/dev/null || true
     else
       log "ERROR: Merge conflict with '$branch'. Aborting merge."
       git merge --abort 2>/dev/null || true
@@ -106,8 +124,17 @@ fi
 
 # ── Step 3: Build prompt and spawn Claude Code ───
 
+PRINCIPLES=""
+if [[ -f "$PROJECT_DIR/PRINCIPLES.md" ]]; then
+  PRINCIPLES=$(cat "$PROJECT_DIR/PRINCIPLES.md")
+fi
+
 PROMPT=$(cat <<'PROMPT_END'
-You are enhancing ThinkOps, an evolution agent system. Below is a diagnostic report and enhancement history.
+You are enhancing ThinkOps, an evolution agent system.
+
+<design-principles>
+PRINCIPLES_PLACEHOLDER
+</design-principles>
 
 <state-report>
 STATE_PLACEHOLDER
@@ -119,20 +146,13 @@ FIXED_PLACEHOLDER
 
 ## Your Task
 
-Pick exactly ONE issue from "Detected Issue Patterns" that has NOT been fixed already (check the <already-fixed> section). Implement a focused fix.
-
-## Priority Order
-
-1. **AUTH_FAILURE_LOOP** — Add auth failure detection to the orchestrator. When a spawn returns "Not logged in" or "403 Request not allowed", treat it like a rate limit: apply backoff and skip the recovery pipeline.
-2. **DUPLICATE_AUDIT_ENTRIES** — In handleRecovery(), when the decision is ABANDON, it logs "abandoned" then falls through to also log "recovery exhausted". Fix the control flow so only one entry per failure.
-3. **EVAL_SKIPPED** — When task-critique or eval-run returns an auth error (cost $0.0000, "Not logged in"), detect and log a warning rather than silently recording "quality: ?/10".
-4. **EMPTY_SKILL_SELECT** — Before spawning skill-select, check if the skill tree has content. Skip if empty.
-5. **EMPTY_CONNECTOR** — Filter out connector files < 100 bytes in listConnectors().
+Pick exactly ONE issue from "Detected Issue Patterns" that has NOT been fixed already (check the <already-fixed> section). Implement a focused fix that respects the design principles above.
 
 ## Rules
 
 - Fix ONE issue per cycle. Do not batch.
-- Read the relevant source files before making changes.
+- Read PRINCIPLES.md first, then the relevant source files before making changes.
+- Every fix must align with the design principles. If a fix would violate a principle, find a different approach.
 - Run `npm test` after changes. All tests must pass.
 - Keep changes minimal — no drive-by cleanups.
 - Do not add comments, docstrings, or type annotations to code you didn't change.
@@ -155,7 +175,8 @@ reason: <why>
 PROMPT_END
 )
 
-# Inject state and history into prompt
+# Inject principles, state, and history into prompt
+PROMPT="${PROMPT/PRINCIPLES_PLACEHOLDER/$PRINCIPLES}"
 PROMPT="${PROMPT/STATE_PLACEHOLDER/$STATE}"
 PROMPT="${PROMPT/FIXED_PLACEHOLDER/$ALREADY_FIXED}"
 
